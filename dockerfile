@@ -1,10 +1,9 @@
-# استفاده از نسخه سبک و آماده Node 22 روی دبیان
-FROM node:22-bullseye-slim
+# استفاده از ایمیج پایتون که برای نصب پکیج‌های علمی بهینه است
+FROM python:3.11-slim-bullseye
 
-# ۱. نصب پایتون و پیش‌نیازهای کروم (بدون ابزارهای اضافی بیلد برای حفظ رم)
+# ۱. نصب پیش‌نیازهای اولیه سیستم
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
+    curl \
     wget \
     gnupg \
     ca-certificates \
@@ -22,7 +21,8 @@ RUN apt-get update && apt-get install -y \
     libxcomposite1 \
     libxrandr2 \
     xdg-utils \
-    --no-install-recommends \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # ۲. نصب گوگل کروم
@@ -31,23 +31,21 @@ RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --d
     && apt-get update && apt-get install -y google-chrome-stable --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# ۳. نصب پکیج‌های پایتون (نصب تکی برای جلوگیری از جهش مصرف رم)
-RUN pip3 install --no-cache-dir --break-system-packages pandas && \
-    pip3 install --no-cache-dir --break-system-packages matplotlib && \
-    pip3 install --no-cache-dir --break-system-packages Pillow mplfinance arabic-reshaper python-bidi
+# ۳. نصب پکیج‌های پایتون فقط به صورت باینری (کلید حل مشکل)
+# --only-binary=:all: باعث می‌شود pip فقط فایل آماده را دانلود کند و اصلا سراغ کامپایل نرود.
+RUN pip install --no-cache-dir --only-binary=:all: pandas matplotlib mplfinance Pillow arabic-reshaper python-bidi
 
 WORKDIR /app
 
-# ۴. نصب بهینه Node Modules (مهم‌ترین بخش برای جلوگیری از کرش npm)
+# ۴. نصب وابستگی‌های Node.js (بسیار سبک)
 COPY package*.json ./
-# استفاده از --no-audit و --no-fund برای کاهش مصرف رم و حذف کش بلافاصله
-RUN npm install --network-timeout=100000 --no-audit --no-fund && npm cache clean --force
+RUN npm install --no-audit --no-fund && npm cache clean --force
 
 # ۵. کپی کدها و بیلد
 COPY . .
 RUN npm run build
 
-# تنظیمات نهایی
+# تنظیمات محیطی
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV NODE_ENV=production
