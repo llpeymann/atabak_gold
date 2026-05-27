@@ -1,11 +1,14 @@
-# مرحله اول: استفاده از یک ایمیج کامل لینوکسی که نود و پایتون را پشتیبانی کند
+# مرحله اول: استفاده از ایمیج Node.js نسخه 20
 FROM node:20-slim
 
-# نصب پایتون و وابستگی‌های مورد نیاز برای رسم نمودار و Puppeteer
+# نصب پایتون، وابستگی‌های سیستمی و دانلود کروم
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-full \
+    wget \
+    gnupg \
+    ca-certificates \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -39,11 +42,17 @@ RUN apt-get update && apt-get install -y \
     libxss1 \
     libxtst6 \
     lsb-release \
-    wget \
     xdg-utils \
+    --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# نصب کتابخانه‌های پایتون (نمودار)
+# نصب مستقیم Google Chrome Stable
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y google-chrome-stable --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# نصب کتابخانه‌های پایتون
 RUN pip3 install --break-system-packages pandas mplfinance matplotlib Pillow arabic-reshaper python-bidi
 
 # تعیین پوشه کاری
@@ -56,21 +65,15 @@ RUN npm install
 # کپی کل پروژه
 COPY . .
 
-# کامپایل کردن کد TypeScript به JavaScript
+# کامپایل کردن کد TypeScript
 RUN npm run build
 
-# تعیین متغیر محیطی برای آدرس کروم (مخصوص Puppeteer در لینوکس داکر)
+# تنظیم متغیر محیطی برای آدرس کروم (Puppeteer از این استفاده می‌کند)
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
-# در اینجا چون از کروم سیستم استفاده نمی‌کنیم، باید puppeteer نسخه پکیج خودش را دانلود کند
-# یا از پکیج puppeteer استفاده کنید که خودش کروم را دانلود می‌کند.
+# باز کردن پورت (Render از این استفاده می‌کند)
+EXPOSE 3000
 
 # اجرای برنامه
 CMD ["npm", "run", "start:prod"]
-
-# نصب مرورگر کروم
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/empty/sources.list.d/google.list' \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*

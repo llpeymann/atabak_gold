@@ -24,28 +24,32 @@ export class PosterService {
       const htmlContent = this.getHtmlTemplate(data, fontBase64);
       
       // ساخت داینامیک تنظیمات Puppeteer
-      const launchOptions: any = {
+            const launchOptions: any = {
         args: [
           '--no-sandbox', 
           '--disable-setuid-sandbox', 
+          '--disable-dev-shm-usage', // اضافه شد برای جلوگیری از کرش در داکر
+          '--disable-gpu',           // اضافه شد برای بهینه‌سازی در سرور
           '--font-render-hinting=none',
         ],
-        headless: true,
+        headless: 'new', // مقدار 'new' برای نسخه‌های جدید پاپتیر توصیه می‌شود
       };
 
       if (process.env.PUPPETEER_EXECUTABLE_PATH) {
         launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
       } else {
+        // در داکر فایل ما، کروم در مسیر استاندارد نصب می‌شود
+        // اگر در لوکال ویندوز هستید و کروم دارید، کانال chrome کار می‌کند
         launchOptions.channel = 'chrome';
       }
 
-      this.logger.log(`Launching Puppeteer with: ${JSON.stringify(launchOptions)}`);
+      this.logger.log(`Launching Puppeteer with settings: ${JSON.stringify(launchOptions)}`);
 
       browser = await puppeteer.launch(launchOptions);
       const page = await browser.newPage();
       
-      await page.setViewport({ width: 800, height: 1200, deviceScaleFactor: 2 }); 
-      
+      await page.setViewport({ width: 800, height: 1200, deviceScaleFactor: 2 });
+
       // انتظار برای لود کامل محتوا و استایل‌ها
       await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
 
