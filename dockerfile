@@ -1,13 +1,9 @@
-FROM node:20-bullseye-slim
+# استفاده از ایمیج پایتون که پکیج‌های علمی را راحت‌تر نصب می‌کند
+FROM python:3.11-slim-bullseye
 
-# ۱. نصب ابزارهای حیاتی برای کامپایل کردن پکیج‌های پایتون
+# ۱. نصب ابزارهای مورد نیاز سیستم و Node.js
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-dev \
-    python3-setuptools \
-    python3-wheel \
-    build-essential \
+    curl \
     wget \
     gnupg \
     ca-certificates \
@@ -45,32 +41,32 @@ RUN apt-get update && apt-get install -y \
     libxtst6 \
     lsb-release \
     xdg-utils \
-    --no-install-recommends \
+    build-essential \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# ۲. نصب گوگل کروم
+# ۲. نصب گوگل کروم برای Puppeteer
 RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update && apt-get install -y google-chrome-stable --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# ۳. آپدیت pip و نصب تمام کتابخانه‌ها یکجا (بدون تداخل با apt)
-# استفاده از --no-cache-dir برای جلوگیری از پر شدن رم سرور
-RUN pip3 install --upgrade pip setuptools wheel --break-system-packages \
-    && pip3 install --no-cache-dir --break-system-packages pandas mplfinance matplotlib Pillow arabic-reshaper python-bidi
+# ۳. نصب پکیج‌های پایتون با مصرف حداقل رم
+RUN pip install --no-cache-dir pandas matplotlib Pillow mplfinance arabic-reshaper python-bidi
 
 # تعیین پوشه کاری
 WORKDIR /app
 
-# کپی فایل‌ها و بیلد
+# ۴. نصب وابستگی‌های Node.js
 COPY package*.json ./
 RUN npm install
 
+# ۵. کپی کدها و بیلد پروژه
 COPY . .
-
 RUN npm run build
 
-# تنظیمات Puppeteer
+# تنظیمات محیطی
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV NODE_ENV=production
