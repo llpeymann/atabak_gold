@@ -1,11 +1,13 @@
-# مرحله اول: استفاده از ایمیج Node.js نسخه 20
-FROM node:20-slim
+# استفاده از Debian Bullseye برای سازگاری بهتر با Chrome و Node
+FROM node:20-bullseye-slim
 
-# نصب پایتون، وابستگی‌های سیستمی و دانلود کروم
+# نصب تمام پیش‌نیازهای سیستمی برای Puppeteer، پایتون و ابزارهای بیلد
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-full \
+    build-essential \
+    python3-dev \
     wget \
     gnupg \
     ca-certificates \
@@ -46,55 +48,27 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# نصب مستقیم Google Chrome Stable
+# نصب Google Chrome Stable
 RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update && apt-get install -y google-chrome-stable --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# نصب کتابخانه‌های پایتون
-RUN pip3 install --break-system-packages pandas mplfinance matplotlib Pillow arabic-reshaper python-bidi
+# نصب کتابخانه‌های پایتون (با آپدیت pip برای جلوگیری از خطا)
+RUN pip3 install --upgrade pip --break-system-packages \
+    && pip3 install --break-system-packages pandas mplfinance matplotlib Pillow arabic-reshaper python-bidi
 
 # تعیین پوشه کاری
 WORKDIR /app
 
-# کپی فایل‌های# استفاده از نسخه Debian Bullseye که برای نصب کروم پایدارتر است
-FROM node:20-bullseye-slim
-
-# نصب ابزارهای مورد نیاز سیستم عامل و پایتون
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-full \
-    wget \
-    gnupg \
-    ca-certificates \
-    fonts-liberation \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
-
-# نصب Google Chrome Stable (نسخه رسمی مخصوص لینوکس)
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update && apt-get install -y google-chrome-stable --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
-
-# نصب کتابخانه‌های پایتون مورد نیاز
-RUN pip3 install --break-system-packages pandas mplfinance matplotlib Pillow arabic-reshaper python-bidi
-
-# تعیین پوشه کاری
-WORKDIR /app
-
-# ابتدا کپی فایل‌های پکیج برای استفاده از کش داکر
+# کپی فایل‌های پکیج و نصب وابستگی‌های Node.js
 COPY package*.json ./
-
-# نصب وابستگی‌های Node.js
 RUN npm install
 
-# کپی کل پروژه به پوشه کاری
+# کپی بقیه کدهای پروژه
 COPY . .
 
-# اجرای بیلد پروژه (NestJS)
+# کامپایل کردن پروژه
 RUN npm run build
 
 # تنظیم متغیرهای محیطی برای Puppeteer
@@ -102,26 +76,7 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV NODE_ENV=production
 
-# پورت مورد نظر
-EXPOSE 3000
-
-# دستور نهایی برای اجرا
-CMD ["npm", "run", "start:prod"]
-# پکیج و نصب وابستگی‌های Node.js
-COPY package*.json ./
-RUN npm install
-
-# کپی کل پروژه
-COPY . .
-
-# کامپایل کردن کد TypeScript
-RUN npm run build
-
-# تنظیم متغیر محیطی برای آدرس کروم (Puppeteer از این استفاده می‌کند)
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-
-# باز کردن پورت (Render از این استفاده می‌کند)
+# باز کردن پورت ۳۰۰۰
 EXPOSE 3000
 
 # اجرای برنامه
