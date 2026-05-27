@@ -247,7 +247,7 @@ export class BotService implements OnApplicationBootstrap {
       { symbol: 'EUR', label: '🇪🇺 یورو' },
       { symbol: 'GBP', label: '🇬🇧 پوند' },
       { symbol: 'TRY', label: '🇹🇷 لیر ترکیه' },
-      { symbol: 'AED', label: '🇦ئه درهم امارات' },
+      { symbol: 'AED', label: '🇦🇪 درهم امارات' },
       { symbol: 'CNY', label: '🇨🇳 یوآن چین' },
     ];
 
