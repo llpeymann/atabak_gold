@@ -29,21 +29,26 @@ export class BaleService {
   }
 
   async sendMessage(chatId: string, text: string): Promise<any> {
-    const url = `${this.getBaseUrl()}/sendMessage`;
-    try {
-      const response = await firstValueFrom(
-        this.httpService.post(url, {
-          chat_id: chatId,
-          text,
-          parse_mode: 'Markdown',
-        })
-      );
-      return response.data;
-    } catch (error) {
-      this.logger.error(`Failed to send message: ${error.message}`);
-      throw error;
-    }
+  const url = `${this.getBaseUrl()}/sendMessage`;
+  try {
+    const response = await firstValueFrom(
+      this.httpService.post(url, {
+        chat_id: chatId,
+        text,
+        parse_mode: 'Markdown',
+      })
+    );
+    
+    // اضافه کردن لاگ موفقیت
+    this.logger.log(`✅ Message successfully sent to channel: ${chatId}`);
+    
+    return response.data;
+  } catch (error) {
+    this.logger.error(`❌ Failed to send message to ${chatId}: ${error.message}`);
+    throw error;
   }
+}
+
 
   // ====================================================================
   //  متد اصلاح شده برای ارسال موفق تصویر

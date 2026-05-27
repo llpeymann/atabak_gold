@@ -21,8 +21,7 @@ interface Candle {
 }
 
 @Injectable()
-// export class BotService implements OnApplicationBootstrap {
-export class BotService  {
+export class BotService implements OnApplicationBootstrap {
   private readonly logger = new Logger(BotService.name);
   private lastPrices: Map<string, number> = new Map();
   private readonly CHANNEL_ID: string;
@@ -40,20 +39,16 @@ export class BotService  {
     }
   }
 
-  // --- تغییر در این متد برای ارسال تست شروع به کار ---
-  // async onApplicationBootstrap() {
-  //   this.logger.log('Bot Service initialized.');
-
-  //   // ارسال پوستر تستی ۵ ثانیه بعد از استارت سرور
-  //   setTimeout(async () => {
-  //     try {
-  //       this.logger.log('🚀 Running Startup Poster Test...');
-  //       await this.sendPricePoster();
-  //     } catch (error) {
-  //       this.logger.error('❌ Startup Poster Test failed: ' + error.message);
-  //     }
-  //   }, 5000);
-  // }
+  // متدی که به محض بالا آمدن سرور اجرا می‌شود
+  async onApplicationBootstrap() {
+    this.logger.log('🚀 Bot Service initialized. Running startup test...');
+    try {
+      // تست ارسال پیام متنی قیمت‌ها بلافاصله بعد از استارت
+      await this.handleCron();
+    } catch (error) {
+      this.logger.error(`❌ Startup Test failed: ${error.message}`);
+    }
+  }
 
   // --- متد ارسال پوستر (هم برای کرون‌جاب و هم برای تست) ---
   @Cron('0 0 12,16,19 * * *') // ساعت ۱۲:۰۰، ۱۶:۰۰ و ۱۹:۰۰
@@ -79,9 +74,14 @@ export class BotService  {
   // ۱. ارسال پیام متنی قیمت‌ها هر ۱۰ دقیقه
   @Cron('0 */10 10-21 * * *') 
   async handleCron() {
-    if (!this.CHANNEL_ID) return;
+    if (!this.CHANNEL_ID) {
+      this.logger.warn('CHANNEL_ID is not configured, skipping cron job.');
+      return;
+    }
 
     try {
+      this.logger.log('⏳ Starting price update process...'); // لاگ شروع فرآیند
+
       const data = await this.priceService.getPrices();
       if (!data) throw new Error('API returned no data');
 
@@ -98,9 +98,14 @@ export class BotService  {
       }
 
       const message = this.formatMessage(data, currentDateFa, currentTimeFa);
+      
+      this.logger.log('📩 Sending message to Bale channel...'); // لاگ قبل از فراخوانی ارسال
       await this.baleService.sendMessage(this.CHANNEL_ID, message);
+      
+      this.logger.log('✅ Market update sent successfully.'); // لاگ موفقیت
+
     } catch (error: any) {
-      this.logger.error(`Failed to send market update: ${error?.message}`);
+      this.logger.error(`❌ Failed to send market update: ${error?.message}`);
     }
   }
 
