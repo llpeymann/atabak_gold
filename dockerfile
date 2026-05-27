@@ -107,7 +107,7 @@ EXPOSE 3000
 
 # دستور نهایی برای اجرا
 CMD ["npm", "run", "start:prod"]
- پکیج و نصب وابستگی‌های Node.js
+# پکیج و نصب وابستگی‌های Node.js
 COPY package*.json ./
 RUN npm install
 
