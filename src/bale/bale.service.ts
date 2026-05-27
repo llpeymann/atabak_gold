@@ -12,95 +12,106 @@ import { Readable } from 'stream';
 @Injectable()
 export class BaleService {
   private readonly logger = new Logger(BaleService.name);
-  private readonly PHOTO_TIMEOUT = 30000;
+  private readonly PHOTO_TIMEOUT = 40000;
 
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {}
 
-  private getBaseUrl(): string {
-    const token = this.configService.get<string>('BALE_BOT_TOKEN');
-    if (!token) {
-      this.logger.error('BALE_BOT_TOKEN is not defined');
-      throw new InternalServerErrorException('Bot token configuration is missing');
-    }
-    return `https://tapi.bale.ai/bot${token}`;
+  private getUrls() {
+    const baleToken = this.configService.get<string>('BALE_BOT_TOKEN');
+    const tgToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
+
+    return {
+      bale: `https://tapi.bale.ai/bot${baleToken}`,
+      telegram: `https://api.telegram.org/bot${tgToken}`
+    };
   }
 
   async sendMessage(chatId: string, text: string): Promise<any> {
-  const url = `${this.getBaseUrl()}/sendMessage`;
-  try {
-    const response = await firstValueFrom(
-      this.httpService.post(url, {
-        chat_id: chatId,
-        text,
-        parse_mode: 'Markdown',
-      })
-    );
-    
-    // اضافه کردن لاگ موفقیت
-    this.logger.log(`✅ Message successfully sent to channel: ${chatId}`);
-    
-    return response.data;
-  } catch (error) {
-    this.logger.error(`❌ Failed to send message to ${chatId}: ${error.message}`);
-    throw error;
+    const urls = this.getUrls();
+    const tgChatId = this.configService.get<string>('TELEGRAM_CHANNEL_ID');
+
+    // تعیین تایپ برای جلوگیری از خطای never
+    const promises: Promise<any>[] = [];
+
+    // ارسال به بله
+    if (this.configService.get('BALE_BOT_TOKEN')) {
+        promises.push(
+          firstValueFrom(this.httpService.post(`${urls.bale}/sendMessage`, {
+            chat_id: chatId,
+            text,
+            parse_mode: 'Markdown',
+          })).then(() => this.logger.log(`✅ Sent to Bale: ${chatId}`))
+             .catch((err) => this.logger.error(`❌ Bale Error: ${err.message}`))
+        );
+    }
+
+    // ارسال به تلگرام
+    if (this.configService.get('TELEGRAM_BOT_TOKEN') && tgChatId) {
+      promises.push(
+        firstValueFrom(this.httpService.post(`${urls.telegram}/sendMessage`, {
+          chat_id: tgChatId,
+          text,
+          parse_mode: 'Markdown',
+        })).then(() => this.logger.log(`✅ Sent to Telegram: ${tgChatId}`))
+           .catch((err) => this.logger.error(`❌ Telegram Error: ${err.message}`))
+      );
+    }
+
+    return Promise.allSettled(promises);
   }
-}
 
-
-  // ====================================================================
-  //  متد اصلاح شده برای ارسال موفق تصویر
-  // ====================================================================
   async sendPhotoBuffer(
     chatId: string,
     buffer: Buffer,
     caption: string,
   ): Promise<any> {
-    if (!chatId) throw new Error('chatId is required');
-    if (!buffer) throw new Error('photo buffer is empty');
+    const urls = this.getUrls();
+    const tgChatId = this.configService.get<string>('TELEGRAM_CHANNEL_ID');
+    
+    // تعیین تایپ برای جلوگیری از خطای never
+    const results: Promise<any>[] = [];
 
-    const url = `${this.getBaseUrl()}/sendPhoto`;
+    // ارسال به بله
+    if (this.configService.get('BALE_BOT_TOKEN')) {
+        results.push(this.executeSendPhoto(urls.bale, chatId, buffer, caption, 'Bale'));
+    }
 
+    // ارسال به تلگرام
+    if (this.configService.get('TELEGRAM_BOT_TOKEN') && tgChatId) {
+        results.push(this.executeSendPhoto(urls.telegram, tgChatId, buffer, caption, 'Telegram'));
+    }
+
+    return Promise.allSettled(results);
+  }
+
+  private async executeSendPhoto(baseUrl: string, targetId: string, buffer: Buffer, caption: string, platformName: string): Promise<void> {
     try {
-      // ۱. تبدیل بافر به استریم برای سازگاری کامل با Form-Data و API بله
       const stream = new Readable();
       stream.push(buffer);
       stream.push(null);
 
-      // ۲. ساخت فرم‌دیتا
       const formData = new FormData();
-      formData.append('chat_id', chatId);
-      
-      // اختصاص نام فایل و هدرهای لازم برای بافر
+      formData.append('chat_id', targetId);
       formData.append('photo', stream, {
-        filename: 'poster.png',
+        filename: 'chart.png',
         contentType: 'image/png',
-        knownLength: buffer.length // کمک به ارسال سریع‌تر و دقیق‌تر
+        knownLength: buffer.length
       });
-      
       formData.append('caption', caption);
+      formData.append('parse_mode', 'Markdown');
 
-      // ۳. ارسال درخواست
-      const response = await firstValueFrom(
-        this.httpService.post(url, formData, {
+      await firstValueFrom(
+        this.httpService.post(`${baseUrl}/sendPhoto`, formData, {
           timeout: this.PHOTO_TIMEOUT,
-          headers: {
-            ...formData.getHeaders(), // این هدر شامل Content-Type صحیح به همراه Boundary است
-          },
+          headers: { ...formData.getHeaders() },
         }),
       );
-
-      this.logger.log('✅ Photo sent successfully to Bale');
-      return response.data;
+      this.logger.log(`✅ Photo sent successfully to ${platformName}`);
     } catch (error: any) {
-      this.logger.error(`❌ Failed to send photo: ${error?.message}`);
-      
-      if (error.response?.data) {
-        this.logger.error(`Bale API Detail: ${JSON.stringify(error.response.data)}`);
-      }
-      throw new Error('Could not send photo to Bale');
+      this.logger.error(`❌ Failed to send photo to ${platformName}: ${error?.message}`);
     }
   }
 }

@@ -16,34 +16,33 @@ export class PriceService {
     private readonly configService: ConfigService,
   ) {}
 
-  /**
-   * دریافت داده‌های بازار از API
-   * در صورت بروز خطا، لاگ ثبت شده و استثنا پرتاب می‌شود
-   */
   async getPrices(): Promise<any> {
     const url = this.configService.get<string>('PRICE_API_URL');
 
     if (!url) {
-      this.logger.error(
-        'PRICE_API_URL is not defined in environment variables',
-      );
-      throw new InternalServerErrorException(
-        'API URL configuration is missing',
-      );
+      this.logger.error('PRICE_API_URL is not defined');
+      throw new InternalServerErrorException('API URL configuration is missing');
     }
 
     try {
       const response = await firstValueFrom(
         this.httpService.get(url, {
           timeout: 15000,
-          headers: { Accept: 'application/json' },
+          headers: { 
+            'Accept': 'application/json',
+            // استفاده از یک یوزر ایجنت کامل و واقعی مرورگر کروم
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          },
         }),
       );
 
       return response.data;
     } catch (error: any) {
-      this.logger.error(`Failed to fetch prices: ${error.message}`);
-      // پرتاب خطا برای اینکه بات بداند دیتایی دریافت نشده است
+      if (error.response) {
+        this.logger.error(`❌ API Error | Status: ${error.response.status} | Data: ${JSON.stringify(error.response.data)}`);
+      } else {
+        this.logger.error(`❌ Connection Error: ${error.message}`);
+      }
       throw new Error('Could not fetch market data from API');
     }
   }
