@@ -12,27 +12,49 @@ export class PosterService {
     try {
       this.logger.log('Generating dynamic poster with Puppeteer...');
       
-      const htmlContent = this.getHtmlTemplate(data);
+      // --- خواندن فونت و تبدیل به Base64 برای اطمینان ۱۰۰٪ از اعمال شدن ---
+      const fontPath = path.resolve(process.cwd(), 'assets', 'Vazir.ttf');
+      let fontBase64 = '';
+      try {
+        fontBase64 = fs.readFileSync(fontPath).toString('base64');
+      } catch (err) {
+        this.logger.error(`Could not read font file at ${fontPath}: ${err.message}`);
+      }
       
-      browser = await puppeteer.launch({
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
+      const htmlContent = this.getHtmlTemplate(data, fontBase64);
+      
+      // ساخت داینامیک تنظیمات Puppeteer
+      const launchOptions: any = {
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox', 
+          '--font-render-hinting=none',
+        ],
+        headless: true,
+      };
 
+      if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+        launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+      } else {
+        launchOptions.channel = 'chrome';
+      }
+
+      this.logger.log(`Launching Puppeteer with: ${JSON.stringify(launchOptions)}`);
+
+      browser = await puppeteer.launch(launchOptions);
       const page = await browser.newPage();
       
-      // تنظیم ابعاد اولیه (بزرگتر از پوستر برای اطمینان)
       await page.setViewport({ width: 800, height: 1200, deviceScaleFactor: 2 }); 
       
+      // انتظار برای لود کامل محتوا و استایل‌ها
       await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
 
-      // پیدا کردن المان اصلی پوستر برای گرفتن اسکرین‌شات دقیق از کادر
       const element = await page.$('.poster');
       if (!element) throw new Error('Poster element not found');
 
       const imageBuffer = await element.screenshot({ 
         type: 'png',
-        omitBackground: true // حذف پس‌زمینه سفید احتمالی پشت کادر گرد
+        omitBackground: true 
       }) as Buffer;
 
       return imageBuffer;
@@ -44,7 +66,7 @@ export class PosterService {
     }
   }
 
-  private getHtmlTemplate(data: any): string {
+  private getHtmlTemplate(data: any, fontBase64: string): string {
     const gold = data?.gold || [];
     const currency = data?.currency || [];
     const global = data?.global || [];
@@ -64,6 +86,14 @@ export class PosterService {
 <head>
     <meta charset="UTF-8">
     <style>
+        /* تزریق مستقیم فونت به صورت Base64 برای رفع مشکل عدم نمایش */
+        @font-face {
+            font-family: 'Vazir';
+            src: url(data:font/ttf;charset=utf-8;base64,${fontBase64}) format('truetype');
+            font-weight: normal;
+            font-style: normal;
+        }
+
         :root {
             --gold: #d4af37;
             --dark-bg: #0d0d0d;
@@ -76,8 +106,8 @@ export class PosterService {
         body {
             margin: 0; 
             padding: 0;
-            background-color: transparent; /* برای تمیز درآمدن لبه‌های گرد */
-            font-family: 'Tahoma', sans-serif;
+            background-color: transparent; 
+            font-family: 'Vazir', 'Tahoma', sans-serif;
             display: flex; 
             justify-content: center;
             align-items: flex-start;
@@ -90,7 +120,7 @@ export class PosterService {
             border: 2px solid var(--gold);
             border-radius: 35px;
             padding: 30px;
-            box-sizing: border-box; /* بسیار مهم برای فیکس شدن ابعاد */
+            box-sizing: border-box; 
             position: relative;
         }
 
@@ -186,7 +216,7 @@ export class PosterService {
 
 <div class="poster">
     <div class="header">
-        <h1>گالری طلای اتابک</h1>
+        <h1> طلای اتابک</h1>
         <p>قیمت لحظه‌ای بازار طلا، سکه و ارز</p>
         <div class="time-badge">
             📅 ${dateFa} - ساعت ${timeFa}
@@ -230,7 +260,7 @@ export class PosterService {
             </div>
             <div class="price-row">
                 <span class="price-value">${getPrice('IR_COIN_1G', gold)}</span>
-                <span class="price-label">ربع سکه</span>
+                <span class="price-label">سکه گرمی</span>
             </div>
         </div>
     </div>

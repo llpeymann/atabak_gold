@@ -61,7 +61,7 @@ export class BotService implements OnApplicationBootstrap {
 
       const imageBuffer = await this.posterService.generatePricePoster(data);
       
-      const caption = `🎨 *گزارش تصویری بازار طلا و ارز*\n✨ گالری طلای اتابک\n🆔 @atabak_gold`;
+      const caption = `\n ━━━━━━━━━━━━━━━━ \n 📎 خرید و فروش طلا و ارز با نرخ روز \n 👔 ثبت سفارش: @atabak_gold_admin \n 📱 شماره تماس: 09123510031 \n ━━━━━━━━━━━━━━━━ \n 🆔 @atabak_gold`;
       
       await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption);
       this.logger.log('Price poster sent successfully.');
