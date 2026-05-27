@@ -1,13 +1,13 @@
 FROM node:20-bullseye-slim
 
-# ۱. نصب پایتون و نسخه‌های آماده و پیش‌کامپایل شده لینوکس برای Pandas و Matplotlib و Pillow
+# ۱. نصب ابزارهای حیاتی برای کامپایل کردن پکیج‌های پایتون
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
-    python3-full \
-    python3-pandas \
-    python3-matplotlib \
-    python3-pil \
+    python3-dev \
+    python3-setuptools \
+    python3-wheel \
+    build-essential \
     wget \
     gnupg \
     ca-certificates \
@@ -48,35 +48,33 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# ۲. نصب مرورگر کروم نسخه پایدار
+# ۲. نصب گوگل کروم
 RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update && apt-get install -y google-chrome-stable --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# ۳. نصب کتابخانه‌های سبک پایتون با pip (که رم مصرف نمی‌کنند و سریع نصب می‌شوند)
-RUN pip3 install --break-system-packages mplfinance arabic-reshaper python-bidi
+# ۳. آپدیت pip و نصب تمام کتابخانه‌ها یکجا (بدون تداخل با apt)
+# استفاده از --no-cache-dir برای جلوگیری از پر شدن رم سرور
+RUN pip3 install --upgrade pip setuptools wheel --break-system-packages \
+    && pip3 install --no-cache-dir --break-system-packages pandas mplfinance matplotlib Pillow arabic-reshaper python-bidi
 
 # تعیین پوشه کاری
 WORKDIR /app
 
-# کپی فایل‌های پکیج و نصب وابستگی‌های Node.js
+# کپی فایل‌ها و بیلد
 COPY package*.json ./
 RUN npm install
 
-# کپی کدهای پروژه
 COPY . .
 
-# کامپایل کردن پروژه NestJS
 RUN npm run build
 
-# تنظیم متغیرهای محیطی برای Puppeteer و کروم
+# تنظیمات Puppeteer
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV NODE_ENV=production
 
-# پورت
 EXPOSE 3000
 
-# شروع برنامه
 CMD ["npm", "run", "start:prod"]
