@@ -1,13 +1,13 @@
-# استفاده از Debian Bullseye برای سازگاری بهتر با Chrome و Node
 FROM node:20-bullseye-slim
 
-# نصب تمام پیش‌نیازهای سیستمی برای Puppeteer، پایتون و ابزارهای بیلد
+# ۱. نصب پایتون و نسخه‌های آماده و پیش‌کامپایل شده لینوکس برای Pandas و Matplotlib و Pillow
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-full \
-    build-essential \
-    python3-dev \
+    python3-pandas \
+    python3-matplotlib \
+    python3-pil \
     wget \
     gnupg \
     ca-certificates \
@@ -48,15 +48,14 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# نصب Google Chrome Stable
+# ۲. نصب مرورگر کروم نسخه پایدار
 RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update && apt-get install -y google-chrome-stable --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# نصب کتابخانه‌های پایتون (با آپدیت pip برای جلوگیری از خطا)
-RUN pip3 install --upgrade pip --break-system-packages \
-    && pip3 install --break-system-packages pandas mplfinance matplotlib Pillow arabic-reshaper python-bidi
+# ۳. نصب کتابخانه‌های سبک پایتون با pip (که رم مصرف نمی‌کنند و سریع نصب می‌شوند)
+RUN pip3 install --break-system-packages mplfinance arabic-reshaper python-bidi
 
 # تعیین پوشه کاری
 WORKDIR /app
@@ -65,19 +64,19 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-# کپی بقیه کدهای پروژه
+# کپی کدهای پروژه
 COPY . .
 
-# کامپایل کردن پروژه
+# کامپایل کردن پروژه NestJS
 RUN npm run build
 
-# تنظیم متغیرهای محیطی برای Puppeteer
+# تنظیم متغیرهای محیطی برای Puppeteer و کروم
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV NODE_ENV=production
 
-# باز کردن پورت ۳۰۰۰
+# پورت
 EXPOSE 3000
 
-# اجرای برنامه
+# شروع برنامه
 CMD ["npm", "run", "start:prod"]
