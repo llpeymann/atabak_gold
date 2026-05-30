@@ -51,7 +51,7 @@ export class BotService implements OnApplicationBootstrap {
   }
 
   // --- متد ارسال پوستر (هم برای کرون‌جاب و هم برای تست) ---
-  @Cron('0 7 12,14,16,19 * * *') // ساعت ۱۲:۰۰، ۱۶:۰۰ و ۱۹:۰۰
+  @Cron('0 0 12,16,19 * * *') // ساعت ۱۲:۰۰، ۱۶:۰۰ و ۱۹:۰۰
   async sendPricePoster() {
     if (!this.CHANNEL_ID) return;
     try {
