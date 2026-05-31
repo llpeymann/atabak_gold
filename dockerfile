@@ -18,8 +18,8 @@ RUN npm run build
 # --- Stage 2: Final ---
 FROM python:3.11-slim-bullseye
 
-RUN sed -i 's|http://deb.debian.org/debian|https://linux-mirror.liara.ir/debian|g' /etc/apt/sources.list && \
-    sed -i 's|http://security.debian.org/debian-security|https://linux-mirror.liara.ir/debian-security|g' /etc/apt/sources.list
+RUN sed -i 's|http://deb.debian.org/debian|http://linux-mirror.liara.ir/debian|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.debian.org/debian-security|http://linux-mirror.liara.ir/debian-security|g' /etc/apt/sources.list
 
 WORKDIR /app
 
