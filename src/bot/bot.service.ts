@@ -146,7 +146,7 @@ export class BotService implements OnApplicationBootstrap {
         `📊 *گزارش تحلیلی تغییرات طلای ۱۸ عیار*\n\n` +
         `📅 *تاریخ:* ${todayFa}\n` +
         `📈 این نمودار نمایش‌دهنده نوسانات قیمتی بازار از شروع معاملات امروز تا لحظه بسته‌شدن است.\n\n` +
-        `✨ *تحلیل هوشمند بازار طلا - گالری اتابک*`;
+        `✨ *تحلیل هوشمند بازار طلا - طلای اتابک*`;
 
       await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption);
 
