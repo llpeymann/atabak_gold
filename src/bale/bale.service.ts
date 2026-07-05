@@ -33,7 +33,6 @@ export class BaleService {
     const urls = this.getUrls();
     const tgChatId = this.configService.get<string>('TELEGRAM_CHANNEL_ID');
 
-    // تعیین تایپ برای جلوگیری از خطای never
     const promises: Promise<any>[] = [];
 
     // ارسال به بله
@@ -42,7 +41,7 @@ export class BaleService {
           firstValueFrom(this.httpService.post(`${urls.bale}/sendMessage`, {
             chat_id: chatId,
             text,
-            parse_mode: 'Markdown',
+            parse_mode: 'HTML',
           })).then(() => this.logger.log(`✅ Sent to Bale: ${chatId}`))
              .catch((err) => this.logger.error(`❌ Bale Error: ${err.message}`))
         );
@@ -54,7 +53,7 @@ export class BaleService {
         firstValueFrom(this.httpService.post(`${urls.telegram}/sendMessage`, {
           chat_id: tgChatId,
           text,
-          parse_mode: 'Markdown',
+          parse_mode: 'HTML',
         })).then(() => this.logger.log(`✅ Sent to Telegram: ${tgChatId}`))
            .catch((err) => this.logger.error(`❌ Telegram Error: ${err.message}`))
       );
@@ -71,7 +70,6 @@ export class BaleService {
     const urls = this.getUrls();
     const tgChatId = this.configService.get<string>('TELEGRAM_CHANNEL_ID');
     
-    // تعیین تایپ برای جلوگیری از خطای never
     const results: Promise<any>[] = [];
 
     // ارسال به بله
@@ -101,7 +99,7 @@ export class BaleService {
         knownLength: buffer.length
       });
       formData.append('caption', caption);
-      formData.append('parse_mode', 'Markdown');
+      formData.append('parse_mode', 'HTML');
 
       await firstValueFrom(
         this.httpService.post(`${baseUrl}/sendPhoto`, formData, {
