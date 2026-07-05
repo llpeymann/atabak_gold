@@ -257,7 +257,7 @@ export class BotService implements OnApplicationBootstrap {
       if (line) lines.push(line);
     });
 
-    lines.push('', '━━━━━━━━━━━━━━━━', '📎 خرید و فروش طلا و ارز با نرخ روز', '👔 ثبت سفارش: @atabak_gold_admin', '📱 شماره تماس: 09123510031', '━━━━━━━━━━━━━━━━', '🆔 @atabak_gold');
+    lines.push('', '━━━━━━━━━━━━━━━━', '📎 خرید و فروش طلا و ارز با نرخ روز', '👔 ثبت سفارش: @atabak_admin', '📱 شماره تماس: 09123510031', '━━━━━━━━━━━━━━━━', '🆔 @tala_atabak');
 
     return lines.join('\n');
   }
