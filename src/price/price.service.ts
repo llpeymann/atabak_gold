@@ -27,7 +27,7 @@ export class PriceService {
     try {
       const response = await firstValueFrom(
         this.httpService.get(url, {
-          timeout: 15000,
+          timeout: 60000,
           headers: { 
             'Accept': 'application/json',
             // استفاده از یک یوزر ایجنت کامل و واقعی مرورگر کروم
