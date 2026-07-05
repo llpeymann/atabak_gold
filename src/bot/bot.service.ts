@@ -143,10 +143,10 @@ export class BotService implements OnApplicationBootstrap {
       const todayFa = new Date().toLocaleDateString('fa-IR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
       const caption = 
-        `📊 *گزارش تحلیلی تغییرات طلای ۱۸ عیار*\n\n` +
-        `📅 *تاریخ:* ${todayFa}\n` +
+        `📊 <b>گزارش تحلیلی تغییرات طلای ۱۸ عیار</b>\n\n` +
+        `📅 <b>تاریخ:</b> ${todayFa}\n` +
         `📈 این نمودار نمایش‌دهنده نوسانات قیمتی بازار از شروع معاملات امروز تا لحظه بسته‌شدن است.\n\n` +
-        `✨ *تحلیل هوشمند بازار طلا - طلای اتابک*`;
+        `✨ <b>تحلیل هوشمند بازار طلا - طلای اتابک</b>`;
 
       await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption);
 
@@ -202,14 +202,14 @@ export class BotService implements OnApplicationBootstrap {
       const trendEmoji = getTrendEmoji(item.symbol, Number(item.price));
       const name = label || item.name || item.symbol;
       const changePercent = item.change_percent ? ` (${item.change_percent}%)` : '';
-      return `${name}: *${formatPrice(item.price)}* ${item.unit || ''} ${trendEmoji}${changePercent}`;
+      return `${name}: <b>${formatPrice(item.price)}</b> ${item.unit || ''} ${trendEmoji}${changePercent}`;
     };
 
     const lines: string[] = [
-        `📌 *گزارش لحظه‌ای بازار*`,
+        `📌 <b>گزارش لحظه‌ای بازار</b>`,
         `🕒 ${currentDate} | ${currentTime}`,
         `━━━━━━━━━━━━━━━━`,
-        `🟨 *طلا*`
+        `🟨 <b>طلا</b>`
     ];
 
     const goldItems = [
@@ -225,7 +225,7 @@ export class BotService implements OnApplicationBootstrap {
       if (line) lines.push(line);
     });
 
-    lines.push('', '🪙 *سکه*');
+    lines.push('', '🪙 <b>سکه</b>');
     const coinItems = [
       { symbol: 'IR_COIN_EMAMI', label: 'سکه امامی' },
       { symbol: 'IR_COIN_BAHAR', label: 'سکه تمام بهار' },
@@ -240,7 +240,7 @@ export class BotService implements OnApplicationBootstrap {
       if (line) lines.push(line);
     });
 
-    lines.push('', '💰 *ارز (تومان)*');
+    lines.push('', '💰 <b>ارز (تومان)</b>');
     const currencyItems = [
       { symbol: 'USDT_IRT', label: 'تتر (فی)' },
       { symbol: 'USD', label: '🇱🇷 دلار آمریکا' },
