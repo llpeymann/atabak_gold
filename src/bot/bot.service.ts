@@ -3,22 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PriceService } from '../price/price.service';
 import { BaleService } from '../bale/bale.service';
 import { ConfigService } from '@nestjs/config';
-import { PriceStorageService } from '../price-storage/price-storage.service';
 import { PosterService } from '../poster/poster.service';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import * as fs from 'fs';
-import * as path from 'path';
-
-const execAsync = promisify(exec);
-
-interface Candle {
-  t: string;
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-}
 
 @Injectable()
 export class BotService implements OnApplicationBootstrap {
@@ -30,7 +15,6 @@ export class BotService implements OnApplicationBootstrap {
     private readonly priceService: PriceService,
     private readonly baleService: BaleService,
     private readonly configService: ConfigService,
-    private readonly storageService: PriceStorageService,
     private readonly posterService: PosterService,
   ) {
     this.CHANNEL_ID = this.configService.get<string>('BALE_CHANNEL_ID') || '';
@@ -68,7 +52,7 @@ export class BotService implements OnApplicationBootstrap {
         `━━━━━━━━━━━━━━━━\n` +
         `🆔 @atabak_gold`;
 
-      await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption);
+      await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption, 'HTML');
       this.logger.log('Price poster sent successfully.');
     } catch (error: any) {
       this.logger.error(`Failed to send price poster: ${error.message}`);
@@ -76,9 +60,9 @@ export class BotService implements OnApplicationBootstrap {
     }
   }
 
-  // ارسال از ۱۰:۰۰ تا ۱۹:۳۰، هر نیم ساعت
+  // ۱. ارسال از ۱۰:۰۰ صبح تا ۱۹:۳۰ عصر، دقیقاً هر نیم ساعت
   @Cron('0 0,30 10-19 * * *')
-  // ارسال نهایی ساعت ۲۰:۰۰
+  // ۲. ارسال نهایی در ساعت ۲۰:۰۰ شب
   @Cron('0 0 20 * * *')
   async handleCron() {
     if (!this.CHANNEL_ID) {
@@ -92,9 +76,6 @@ export class BotService implements OnApplicationBootstrap {
       const data = await this.priceService.getPrices();
       if (!data) throw new Error('API returned no data');
 
-      const gold = data?.gold || [];
-      const gold18k = gold.find((item: any) => item.symbol === 'IR_GOLD_18K');
-
       const now = new Date();
       const currentTimeFa = now.toLocaleTimeString('fa-IR', {
         hour: '2-digit',
@@ -102,15 +83,6 @@ export class BotService implements OnApplicationBootstrap {
         hour12: false,
       });
       const currentDateFa = now.toLocaleDateString('fa-IR');
-      const currentTimeEn = now.toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      });
-
-      if (gold18k) {
-        await this.storageService.savePrice('IR_GOLD_18K', Number(gold18k.price), currentTimeEn);
-      }
 
       const message = this.formatMessage(data, currentDateFa, currentTimeFa);
 
@@ -121,86 +93,6 @@ export class BotService implements OnApplicationBootstrap {
     } catch (error: any) {
       this.logger.error(`❌ Failed to send market update: ${error?.message}`);
     }
-  }
-
-  @Cron('0 1 21 * * *')
-  async sendDailyChart() {
-    try {
-      this.logger.log('Generating final daily candlestick chart for 9:01 PM report...');
-
-      const allData = await this.storageService.getAllData();
-      const goldData = allData['IR_GOLD_18K'] || [];
-
-      if (goldData.length < 2) {
-        this.logger.warn('Insufficient data for generating daily chart.');
-        return;
-      }
-
-      const pythonData = this.generateHourlyCandles(goldData);
-      const tempDir = path.join(process.cwd(), 'temp');
-      await fs.promises.mkdir(tempDir, { recursive: true });
-
-      const inputPath = path.join(tempDir, 'chart_data.json');
-      const outputPath = path.join(tempDir, 'daily_chart.png');
-
-      await fs.promises.writeFile(inputPath, JSON.stringify(pythonData), 'utf-8');
-
-      const pythonScriptPath = path.join(process.cwd(), 'scripts', 'generate_chart.py');
-      const { stderr } = await execAsync(`python "${pythonScriptPath}" "${inputPath}" "${outputPath}"`);
-
-      if (stderr && !stderr.includes('UserWarning')) {
-        this.logger.error(`Python script error: ${stderr}`);
-      }
-
-      const imageBuffer = await fs.promises.readFile(outputPath);
-      const todayFa = new Date().toLocaleDateString('fa-IR', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      });
-
-      const caption =
-        `📊 <b>گزارش تحلیلی تغییرات طلای ۱۸ عیار</b>\n\n` +
-        `📅 <b>تاریخ:</b> ${this.escapeHtml(todayFa)}\n` +
-        `📈 این نمودار نمایش‌دهنده نوسانات قیمتی بازار از شروع معاملات امروز تا لحظه بسته‌شدن است.\n\n` +
-        `✨ <b>تحلیل هوشمند بازار طلا - طلای اتابک</b>`;
-
-      await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption, 'HTML');
-
-      if (fs.existsSync(inputPath)) await fs.promises.unlink(inputPath);
-      if (fs.existsSync(outputPath)) await fs.promises.unlink(outputPath);
-
-      await this.storageService.clearDailyData();
-
-      this.logger.log('Daily chart sent successfully. Cleaned up temp files.');
-    } catch (error: any) {
-      this.logger.error(`Failed to send daily chart: ${error.message}`);
-    }
-  }
-
-  private generateHourlyCandles(data: any[]): Candle[] {
-    const groups: { [key: string]: number[] } = {};
-
-    data.forEach((d) => {
-      const hour = d.time.split(':')[0];
-      if (!groups[hour]) groups[hour] = [];
-      groups[hour].push(Number(d.price));
-    });
-
-    return Object.keys(groups)
-      .sort()
-      .map((hour) => {
-        const prices = groups[hour];
-
-        return {
-          t: `${hour}:00`,
-          o: prices[0],
-          h: Math.max(...prices),
-          l: Math.min(...prices),
-          c: prices[prices.length - 1],
-        };
-      });
   }
 
   private escapeHtml(value: any): string {
