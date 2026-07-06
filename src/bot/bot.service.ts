@@ -4,7 +4,7 @@ import { PriceService } from '../price/price.service';
 import { BaleService } from '../bale/bale.service';
 import { ConfigService } from '@nestjs/config';
 import { PriceStorageService } from '../price-storage/price-storage.service';
-import { PosterService } from '../poster/poster.service'; // اضافه شده
+import { PosterService } from '../poster/poster.service';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
@@ -13,11 +13,11 @@ import * as path from 'path';
 const execAsync = promisify(exec);
 
 interface Candle {
-  t: string; // Time (HH:00)
-  o: number; // Open
-  h: number; // High
-  l: number; // Low
-  c: number; // Close
+  t: string;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
 }
 
 @Injectable()
@@ -31,7 +31,7 @@ export class BotService implements OnApplicationBootstrap {
     private readonly baleService: BaleService,
     private readonly configService: ConfigService,
     private readonly storageService: PriceStorageService,
-    private readonly posterService: PosterService, // تزریق سرویس پوستر
+    private readonly posterService: PosterService,
   ) {
     this.CHANNEL_ID = this.configService.get<string>('BALE_CHANNEL_ID') || '';
     if (!this.CHANNEL_ID) {
@@ -39,40 +39,47 @@ export class BotService implements OnApplicationBootstrap {
     }
   }
 
-  // متدی که به محض بالا آمدن سرور اجرا می‌شود
   async onApplicationBootstrap() {
     this.logger.log('🚀 Bot Service initialized. Running startup test...');
     try {
-      // تست ارسال پیام متنی قیمت‌ها بلافاصله بعد از استارت
       await this.handleCron();
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`❌ Startup Test failed: ${error.message}`);
     }
   }
 
-  // --- متد ارسال پوستر (هم برای کرون‌جاب و هم برای تست) ---
-  @Cron('0 0 12,16,19 * * *') // ساعت ۱۲:۰۰، ۱۶:۰۰ و ۱۹:۰۰
+  @Cron('0 0 12,16,19 * * *')
   async sendPricePoster() {
     if (!this.CHANNEL_ID) return;
+
     try {
       this.logger.log('Generating and sending price poster...');
+
       const data = await this.priceService.getPrices();
       if (!data) throw new Error('API returned no data for poster');
 
       const imageBuffer = await this.posterService.generatePricePoster(data);
-      
-      const caption = `\n ━━━━━━━━━━━━━━━━ \n 📎 خرید و فروش طلا و ارز با نرخ روز \n 👔 ثبت سفارش: @atabak_gold_admin \n 📱 شماره تماس: 09123510031 \n ━━━━━━━━━━━━━━━━ \n 🆔 @atabak_gold`;
-      
+
+      const caption =
+        `\n━━━━━━━━━━━━━━━━\n` +
+        `📎 خرید و فروش طلا و ارز با نرخ روز\n` +
+        `👔 ثبت سفارش: @atabak_gold_admin\n` +
+        `📱 شماره تماس: 09123510031\n` +
+        `━━━━━━━━━━━━━━━━\n` +
+        `🆔 @atabak_gold`;
+
       await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption);
       this.logger.log('Price poster sent successfully.');
     } catch (error: any) {
       this.logger.error(`Failed to send price poster: ${error.message}`);
-      throw error; // برای اینکه در لاگ تست نمایش داده شود
+      throw error;
     }
   }
 
-  // ۱. ارسال پیام متنی قیمت‌ها هر ۱۰ دقیقه
-  @Cron('0 */10 10-21 * * *') 
+  // ارسال از ۱۰:۰۰ تا ۱۹:۳۰، هر نیم ساعت
+  @Cron('0 0,30 10-19 * * *')
+  // ارسال نهایی ساعت ۲۰:۰۰
+  @Cron('0 0 20 * * *')
   async handleCron() {
     if (!this.CHANNEL_ID) {
       this.logger.warn('CHANNEL_ID is not configured, skipping cron job.');
@@ -80,41 +87,47 @@ export class BotService implements OnApplicationBootstrap {
     }
 
     try {
-      this.logger.log('⏳ Starting price update process...'); // لاگ شروع فرآیند
+      this.logger.log('⏳ Starting price update process...');
 
       const data = await this.priceService.getPrices();
       if (!data) throw new Error('API returned no data');
 
       const gold = data?.gold || [];
       const gold18k = gold.find((item: any) => item.symbol === 'IR_GOLD_18K');
-      
+
       const now = new Date();
-      const currentTimeFa = now.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit', hour12: false });
+      const currentTimeFa = now.toLocaleTimeString('fa-IR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
       const currentDateFa = now.toLocaleDateString('fa-IR');
-      const currentTimeEn = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      const currentTimeEn = now.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
 
       if (gold18k) {
         await this.storageService.savePrice('IR_GOLD_18K', Number(gold18k.price), currentTimeEn);
       }
 
       const message = this.formatMessage(data, currentDateFa, currentTimeFa);
-      
-      this.logger.log('📩 Sending message to Bale channel...'); // لاگ قبل از فراخوانی ارسال
-      await this.baleService.sendMessage(this.CHANNEL_ID, message);
-      
-      this.logger.log('✅ Market update sent successfully.'); // لاگ موفقیت
 
+      this.logger.log('📩 Sending message to Bale channel...');
+      await this.baleService.sendMessage(this.CHANNEL_ID, message, 'HTML');
+
+      this.logger.log('✅ Market update sent successfully.');
     } catch (error: any) {
       this.logger.error(`❌ Failed to send market update: ${error?.message}`);
     }
   }
 
-  // ۲. تولید و ارسال خودکار نمودار کندل‌استیک
-  @Cron('0 1 21 * * *') 
+  @Cron('0 1 21 * * *')
   async sendDailyChart() {
     try {
       this.logger.log('Generating final daily candlestick chart for 9:01 PM report...');
-      
+
       const allData = await this.storageService.getAllData();
       const goldData = allData['IR_GOLD_18K'] || [];
 
@@ -138,24 +151,29 @@ export class BotService implements OnApplicationBootstrap {
       if (stderr && !stderr.includes('UserWarning')) {
         this.logger.error(`Python script error: ${stderr}`);
       }
-      
-      const imageBuffer = await fs.promises.readFile(outputPath);
-      const todayFa = new Date().toLocaleDateString('fa-IR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-      const caption = 
+      const imageBuffer = await fs.promises.readFile(outputPath);
+      const todayFa = new Date().toLocaleDateString('fa-IR', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+
+      const caption =
         `📊 <b>گزارش تحلیلی تغییرات طلای ۱۸ عیار</b>\n\n` +
-        `📅 <b>تاریخ:</b> ${todayFa}\n` +
+        `📅 <b>تاریخ:</b> ${this.escapeHtml(todayFa)}\n` +
         `📈 این نمودار نمایش‌دهنده نوسانات قیمتی بازار از شروع معاملات امروز تا لحظه بسته‌شدن است.\n\n` +
         `✨ <b>تحلیل هوشمند بازار طلا - طلای اتابک</b>`;
 
-      await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption);
+      await this.baleService.sendPhotoBuffer(this.CHANNEL_ID, imageBuffer, caption, 'HTML');
 
       if (fs.existsSync(inputPath)) await fs.promises.unlink(inputPath);
       if (fs.existsSync(outputPath)) await fs.promises.unlink(outputPath);
-      await this.storageService.clearDailyData(); 
-      
-      this.logger.log('Daily chart sent successfully. Cleaned up temp files.');
 
+      await this.storageService.clearDailyData();
+
+      this.logger.log('Daily chart sent successfully. Cleaned up temp files.');
     } catch (error: any) {
       this.logger.error(`Failed to send daily chart: ${error.message}`);
     }
@@ -163,22 +181,33 @@ export class BotService implements OnApplicationBootstrap {
 
   private generateHourlyCandles(data: any[]): Candle[] {
     const groups: { [key: string]: number[] } = {};
-    data.forEach(d => {
-      const hour = d.time.split(':')[0]; 
+
+    data.forEach((d) => {
+      const hour = d.time.split(':')[0];
       if (!groups[hour]) groups[hour] = [];
       groups[hour].push(Number(d.price));
     });
 
-    return Object.keys(groups).sort().map(hour => {
-      const prices = groups[hour];
-      return {
-        t: `${hour}:00`, 
-        o: prices[0], 
-        h: Math.max(...prices), 
-        l: Math.min(...prices), 
-        c: prices[prices.length - 1] 
-      };
-    });
+    return Object.keys(groups)
+      .sort()
+      .map((hour) => {
+        const prices = groups[hour];
+
+        return {
+          t: `${hour}:00`,
+          o: prices[0],
+          h: Math.max(...prices),
+          l: Math.min(...prices),
+          c: prices[prices.length - 1],
+        };
+      });
+  }
+
+  private escapeHtml(value: any): string {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   private formatMessage(data: any, currentDate: string, currentTime: string): string {
@@ -193,23 +222,30 @@ export class BotService implements OnApplicationBootstrap {
     const getTrendEmoji = (symbol: string, currentPrice: number): string => {
       const lastPrice = this.lastPrices.get(symbol);
       this.lastPrices.set(symbol, currentPrice);
+
       if (lastPrice === undefined) return '◽';
       return currentPrice > lastPrice ? '🔺' : currentPrice < lastPrice ? '🔻' : '🔹';
     };
 
     const formatLine = (item: any, label?: string): string | null => {
       if (!item || !item.price) return null;
+
       const trendEmoji = getTrendEmoji(item.symbol, Number(item.price));
-      const name = label || item.name || item.symbol;
-      const changePercent = item.change_percent ? ` (${item.change_percent}%)` : '';
-      return `${name}: <b>${formatPrice(item.price)}</b> ${item.unit || ''} ${trendEmoji}${changePercent}`;
+      const name = this.escapeHtml(label || item.name || item.symbol);
+      const price = this.escapeHtml(formatPrice(item.price));
+      const unit = this.escapeHtml(item.unit || '');
+      const changePercent = item.change_percent
+        ? ` (${this.escapeHtml(item.change_percent)}%)`
+        : '';
+
+      return `${name}: <b>${price}</b> ${unit} ${trendEmoji}${changePercent}`;
     };
 
     const lines: string[] = [
-        `📌 <b>گزارش لحظه‌ای بازار</b>`,
-        `🕒 ${currentDate} | ${currentTime}`,
-        `━━━━━━━━━━━━━━━━`,
-        `🟨 <b>طلا</b>`
+      `📌 <b>گزارش لحظه‌ای بازار</b>`,
+      `🕒 ${this.escapeHtml(currentDate)} | ${this.escapeHtml(currentTime)}`,
+      `━━━━━━━━━━━━━━━━`,
+      `🟨 <b>طلا</b>`,
     ];
 
     const goldItems = [
@@ -219,13 +255,14 @@ export class BotService implements OnApplicationBootstrap {
       { symbol: 'IR_GOLD_MELTED', label: 'آبشده نقدی' },
     ];
 
-    goldItems.forEach(s => {
+    goldItems.forEach((s) => {
       const item = gold.find((g: any) => g.symbol === s.symbol);
       const line = formatLine(item, s.label);
       if (line) lines.push(line);
     });
 
     lines.push('', '🪙 <b>سکه</b>');
+
     const coinItems = [
       { symbol: 'IR_COIN_EMAMI', label: 'سکه امامی' },
       { symbol: 'IR_COIN_BAHAR', label: 'سکه تمام بهار' },
@@ -234,13 +271,14 @@ export class BotService implements OnApplicationBootstrap {
       { symbol: 'IR_COIN_1G', label: 'سکه گرمی' },
     ];
 
-    coinItems.forEach(s => {
+    coinItems.forEach((s) => {
       const item = gold.find((g: any) => g.symbol === s.symbol);
       const line = formatLine(item, s.label);
       if (line) lines.push(line);
     });
 
     lines.push('', '💰 <b>ارز (تومان)</b>');
+
     const currencyItems = [
       { symbol: 'USDT_IRT', label: 'تتر (فی)' },
       { symbol: 'USD', label: '🇱🇷 دلار آمریکا' },
@@ -251,13 +289,21 @@ export class BotService implements OnApplicationBootstrap {
       { symbol: 'CNY', label: '🇨🇳 یوآن چین' },
     ];
 
-    currencyItems.forEach(s => {
+    currencyItems.forEach((s) => {
       const item = currency.find((c: any) => c.symbol === s.symbol);
       const line = formatLine(item, s.label);
       if (line) lines.push(line);
     });
 
-    lines.push('', '━━━━━━━━━━━━━━━━', '📎 خرید و فروش طلا و ارز با نرخ روز', '👔 ثبت سفارش: @atabak_admin', '📱 شماره تماس: 09123510031', '━━━━━━━━━━━━━━━━', '🆔 @tala_atabak');
+    lines.push(
+      '',
+      '━━━━━━━━━━━━━━━━',
+      '📎 خرید و فروش طلا و ارز با نرخ روز',
+      '👔 ثبت سفارش: @atabak_admin',
+      '📱 شماره تماس: 09123510031',
+      '━━━━━━━━━━━━━━━━',
+      '🆔 @tala_atabak',
+    );
 
     return lines.join('\n');
   }
