@@ -5,7 +5,6 @@ import { ConfigModule } from '@nestjs/config';
 import { BaleService } from './bale/bale.service';
 import { PriceService } from './price/price.service';
 import { BotService } from './bot/bot.service';
-import { PriceStorageService } from './price-storage/price-storage.service';
 import { PosterService } from './poster/poster.service';
 
 @Module({
@@ -14,6 +13,6 @@ import { PosterService } from './poster/poster.service';
     HttpModule,
     ScheduleModule.forRoot(),
   ],
-  providers: [BaleService, PriceService, BotService, PriceStorageService, PosterService],
+  providers: [BaleService, PriceService, BotService, PosterService],
 })
 export class AppModule {}
