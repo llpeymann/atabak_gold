@@ -57,10 +57,10 @@ export class BotService {
       const caption =
         `\n━━━━━━━━━━━━━━━━\n` +
         `📎 خرید و فروش طلا و ارز با نرخ روز\n` +
-        `👔 ثبت سفارش: @atabak_gold_admin\n` +
+        `👔 ثبت سفارش: @atabak_admin\n` +
         `📱 شماره تماس: 09123510031\n` +
         `━━━━━━━━━━━━━━━━\n` +
-        `🆔 @atabak_gold`;
+        `🆔 @tala_atabak`;
 
       await this.baleService.sendPhotoBuffer(
         this.CHANNEL_ID,
