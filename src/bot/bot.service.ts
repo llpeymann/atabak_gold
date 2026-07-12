@@ -29,7 +29,7 @@ export class BotService {
   }
 
   /**
-   * ارسال پوستر قیمت در ساعت‌های ۱۲، ۱۶ و ۱۹ به وقت ایران
+   * ارسال گزارش قیمت در ساعت‌های ۱۲، ۱۶ و ۱۹ به وقت ایران
    */
   @Cron('0 0 12,16,19 * * *', {
     timeZone: BotService.TIME_ZONE,
@@ -43,7 +43,7 @@ export class BotService {
     }
 
     try {
-      this.logger.log('Generating and sending price poster...');
+      this.logger.log('Generating and sending price poster text...');
 
       const data = await this.priceService.getPrices();
 
@@ -51,25 +51,24 @@ export class BotService {
         throw new Error('API returned no data for poster');
       }
 
-      const imageBuffer =
+      const posterText =
         await this.posterService.generatePricePoster(data);
 
-      const caption =
-        `\n━━━━━━━━━━━━━━━━\n` +
+      const footer =
+        `\n\n━━━━━━━━━━━━━━━━\n` +
         `📎 خرید و فروش طلا و ارز با نرخ روز\n` +
         `👔 ثبت سفارش: @atabak_admin\n` +
         `📱 شماره تماس: 09123510031\n` +
         `━━━━━━━━━━━━━━━━\n` +
         `🆔 @tala_atabak`;
 
-      await this.baleService.sendPhotoBuffer(
+      await this.baleService.sendMessage(
         this.CHANNEL_ID,
-        imageBuffer,
-        caption,
+        `${posterText}${footer}`,
         'HTML',
       );
 
-      this.logger.log('Price poster sent successfully.');
+      this.logger.log('Price poster text sent successfully.');
     } catch (error: any) {
       this.logger.error(
         `Failed to send price poster: ${error?.message}`,
@@ -322,7 +321,7 @@ export class BotService {
       },
       {
         symbol: 'USD',
-        label: '🇱🇷 دلار آمریکا',
+        label: '🇺🇸 دلار آمریکا',
       },
       {
         symbol: 'EUR',
