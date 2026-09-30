@@ -82,18 +82,45 @@ export class BaleService {
     });
   }
 
+  /**
+   * Send a message to an explicit chat/channel instead of the configured publication targets.
+   * Used for operational (admin) alerts, which must never reach the public channel.
+   */
+  async sendMessageTo(chatId: string, text: string): Promise<DeliveryResult[]> {
+    const payloadText = normalizeHtmlForDelivery(text);
+    const settled = await Promise.allSettled(
+      this.targets.map((target) => this.deliver(target, payloadText, chatId)),
+    );
+
+    return settled.map((entry, index) => {
+      if (entry.status === 'fulfilled') {
+        return entry.value;
+      }
+
+      const target = this.targets[index];
+      return this.failureResult(
+        target,
+        describeError(entry.reason),
+        Date.now(),
+        chatId,
+      );
+    });
+  }
+
   private async deliver(
     target: DeliveryTarget,
     text: string,
+    overrideChatId?: string,
   ): Promise<DeliveryResult> {
     const startedAt = Date.now();
+    const chatId = overrideChatId ?? target.channelId;
 
     try {
       await firstValueFrom(
         this.httpService.post(
           `${target.apiBaseUrl}/sendMessage`,
           {
-            chat_id: target.channelId,
+            chat_id: chatId,
             text,
             parse_mode: 'HTML',
           },
@@ -103,12 +130,12 @@ export class BaleService {
 
       const durationMs = Date.now() - startedAt;
       this.logger.log(
-        `✅ Message delivered to ${target.platform} (channel ${target.channelId}) in ${durationMs}ms`,
+        `✅ Message delivered to ${target.platform} (channel ${chatId}) in ${durationMs}ms`,
       );
 
       return {
         platform: target.platform,
-        channel: target.channelId,
+        channel: chatId,
         messageType: 'text',
         timestamp: new Date().toISOString(),
         durationMs,
@@ -117,10 +144,10 @@ export class BaleService {
     } catch (error) {
       const description = this.describeDeliveryError(error);
       this.logger.error(
-        `❌ Message delivery failed on ${target.platform} (channel ${target.channelId}): ${description}`,
+        `❌ Message delivery failed on ${target.platform} (channel ${chatId}): ${description}`,
       );
 
-      return this.failureResult(target, description, startedAt);
+      return this.failureResult(target, description, startedAt, chatId);
     }
   }
 
@@ -128,10 +155,11 @@ export class BaleService {
     target: DeliveryTarget,
     error: string,
     startedAt = Date.now(),
+    chatId = target.channelId,
   ): DeliveryResult {
     return {
       platform: target.platform,
-      channel: target.channelId,
+      channel: chatId,
       messageType: 'text',
       timestamp: new Date().toISOString(),
       durationMs: Date.now() - startedAt,

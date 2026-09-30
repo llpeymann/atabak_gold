@@ -28,6 +28,11 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
 
+# Market state persistence (MARKET_STATE_FILE) must be writable by the runtime user,
+# otherwise the state could not survive a restart.
+RUN mkdir -p /app/data && chown -R node:node /app/data
+VOLUME ["/app/data"]
+
 EXPOSE 3000
 
 # Run as the unprivileged user that ships with the Node image.

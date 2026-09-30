@@ -8,9 +8,15 @@ import { AppService } from './app.service';
 import { BaleService } from './bale/bale.service';
 import { BotService } from './bot/bot.service';
 import { PriceMessageBuilder } from './bot/price-message.builder';
-import { TrendTracker } from './bot/trend-tracker';
 import { AppConfigService } from './config/app-config.service';
 import { validateEnvironment } from './config/env.validation';
+import { AnomalyAlertService } from './market/anomaly-alert.service';
+import { MarketEngineService } from './market/market-engine.service';
+import { MarketStateService } from './market/market-state.service';
+import { MarketStateStore } from './market/market-state.store';
+import { PriceNormalizer } from './market/price-normalizer.service';
+import { RawPayloadParser } from './market/raw-payload.parser';
+import { SanityChecker } from './market/sanity-checker.service';
 import { PosterService } from './poster/poster.service';
 import { PriceService } from './price/price.service';
 
@@ -31,10 +37,18 @@ import { PriceService } from './price/price.service';
     AppService,
     AppConfigService,
     BaleService,
+    // Market reliability pipeline (Phase 1).
+    RawPayloadParser,
+    PriceNormalizer,
+    SanityChecker,
+    MarketStateStore,
+    MarketStateService,
+    AnomalyAlertService,
+    MarketEngineService,
+    // Provider + publishers.
     PriceService,
     PosterService,
     PriceMessageBuilder,
-    TrendTracker,
     BotService,
   ],
 })

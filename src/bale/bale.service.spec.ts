@@ -125,6 +125,31 @@ describe('BaleService', () => {
     expect(description).not.toContain('bale-token');
     expect(description).toContain('***');
   });
+  it('sends an operational alert to an explicit chat without touching the publication channel', async () => {
+    const { service, http } = createService();
+    http.post.mockReturnValue(of({ data: { ok: true } }));
+
+    const results = await service.sendMessageTo('admin-chat', '🚨 anomaly');
+
+    expect(results[0]).toMatchObject({ success: true, channel: 'admin-chat' });
+    expect(http.post).toHaveBeenCalledWith(
+      expect.stringContaining('/sendMessage'),
+      expect.objectContaining({ chat_id: 'admin-chat', text: '🚨 anomaly' }),
+      expect.objectContaining({ timeout: 2000 }),
+    );
+  });
+
+  it('reports a failure for an explicit-chat alert instead of hiding it', async () => {
+    const { service, http } = createService();
+    http.post.mockReturnValue(
+      throwError(() => httpError(403, { description: 'chat not found' })),
+    );
+
+    const results = await service.sendMessageTo('admin-chat', 'alert');
+
+    expect(results[0]).toMatchObject({ success: false, channel: 'admin-chat' });
+    expect(results[0]?.error).toContain('HTTP 403');
+  });
 });
 
 describe('summarizeDelivery', () => {

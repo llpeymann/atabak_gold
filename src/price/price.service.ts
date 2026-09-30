@@ -4,26 +4,25 @@ import axios from 'axios';
 import { firstValueFrom } from 'rxjs';
 
 import { AppConfigService, PriceApiConfig } from '../config/app-config.service';
-import { parseAmount, toRial } from '../common/money';
 import { describeError, sanitizeUrl, truncate } from '../common/log-safety';
-import {
-  MarketData,
-  MarketPriceItem,
-  RawMarketPayload,
-} from './price.interface';
 import { PriceApiError } from './price.error';
 
-const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+/** Raw payload as returned by the provider — deliberately untyped domain-wise. */
+export interface RawPriceFetch {
+  payload: unknown;
+  /** When this application received the response (never the provider's own timestamp). */
+  receivedAt: string;
+  /** Sanitized source identifier (no credentials, no query string). */
+  source: string;
+}
 
 /**
- * Price API client.
+ * Price provider.
  *
- * Phase 0 guarantees implemented here:
- *  - configurable, enforced request timeout (no indefinite waits),
- *  - bounded retry with exponential backoff for transient failures only,
- *  - payload validation: malformed or unusable data raises an error instead of being
- *    published, so a failed request can never turn into a fake price.
+ * Phase 1 keeps this class focused on *transport only*: fetch the external payload reliably
+ * (timeout, bounded retry for transient failures) and hand it over untouched. Parsing, schema
+ * validation, normalization and market sanity all live in `src/market/*`, so the provider can
+ * never decide on its own what a valid price is.
  */
 @Injectable()
 export class PriceService {
@@ -34,14 +33,13 @@ export class PriceService {
     private readonly config: AppConfigService,
   ) {}
 
-  async getMarketData(): Promise<MarketData> {
+  async fetchRawPayload(): Promise<RawPriceFetch> {
     const priceApi = this.config.priceApi;
     let lastError: PriceApiError | null = null;
 
     for (let attempt = 1; attempt <= priceApi.maxAttempts; attempt += 1) {
       try {
         const payload = await this.requestOnce(priceApi, attempt);
-        const marketData = this.normalizePayload(payload, priceApi);
 
         if (attempt > 1) {
           this.logger.log(
@@ -49,9 +47,13 @@ export class PriceService {
           );
         }
 
-        return marketData;
+        return {
+          payload,
+          receivedAt: new Date().toISOString(),
+          source: sanitizeUrl(priceApi.url),
+        };
       } catch (error) {
-        const apiError = this.toPriceApiError(error, priceApi);
+        const apiError = this.toPriceApiError(error, priceApi, attempt);
         lastError = apiError;
 
         const hasAttemptsLeft = attempt < priceApi.maxAttempts;
@@ -89,7 +91,8 @@ export class PriceService {
           timeout: priceApi.timeoutMs,
           headers: {
             Accept: 'application/json',
-            'User-Agent': USER_AGENT,
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           },
         }),
       );
@@ -103,7 +106,7 @@ export class PriceService {
   private toPriceApiError(
     error: unknown,
     priceApi: PriceApiConfig,
-    attempt = 1,
+    attempt: number,
   ): PriceApiError {
     if (error instanceof PriceApiError) {
       return error;
@@ -126,7 +129,6 @@ export class PriceService {
         );
       }
 
-      // No response at all: connection problem, DNS failure or the configured timeout.
       return new PriceApiError(
         `Price API request to ${target} failed: ${describeError(error)}`,
         { retryable: true, attempts: attempt },
@@ -137,105 +139,6 @@ export class PriceService {
       `Unexpected error while calling ${target}: ${describeError(error)}`,
       { retryable: false, attempts: attempt },
     );
-  }
-
-  private normalizePayload(
-    payload: unknown,
-    priceApi: PriceApiConfig,
-  ): MarketData {
-    if (
-      typeof payload !== 'object' ||
-      payload === null ||
-      Array.isArray(payload)
-    ) {
-      throw new PriceApiError(
-        'Price API returned an unexpected payload (expected a JSON object)',
-      );
-    }
-
-    const raw = payload as RawMarketPayload;
-    const gold = this.normalizeSection(raw.gold, 'gold', priceApi);
-    const currency = this.normalizeSection(raw.currency, 'currency', priceApi);
-
-    if (gold.length === 0 && currency.length === 0) {
-      throw new PriceApiError(
-        'Price API returned no usable prices — nothing will be published',
-      );
-    }
-
-    return { gold, currency, fetchedAt: new Date().toISOString() };
-  }
-
-  private normalizeSection(
-    rawSection: unknown,
-    sectionName: 'gold' | 'currency',
-    priceApi: PriceApiConfig,
-  ): MarketPriceItem[] {
-    if (rawSection === undefined || rawSection === null) {
-      this.logger.warn(`Price API payload has no "${sectionName}" section.`);
-      return [];
-    }
-
-    if (!Array.isArray(rawSection)) {
-      throw new PriceApiError(
-        `Price API payload has an invalid "${sectionName}" section (expected an array)`,
-      );
-    }
-
-    const items: MarketPriceItem[] = [];
-
-    for (const rawItem of rawSection) {
-      const item = this.normalizeItem(rawItem, sectionName, priceApi);
-      if (item) {
-        items.push(item);
-      }
-    }
-
-    return items;
-  }
-
-  private normalizeItem(
-    rawItem: unknown,
-    sectionName: string,
-    priceApi: PriceApiConfig,
-  ): MarketPriceItem | null {
-    if (typeof rawItem !== 'object' || rawItem === null) {
-      this.logger.warn(
-        `Skipped a malformed item in "${sectionName}" (not an object).`,
-      );
-      return null;
-    }
-
-    const item = rawItem as RawMarketPayload;
-    const symbol = typeof item.symbol === 'string' ? item.symbol.trim() : '';
-
-    if (symbol === '') {
-      this.logger.warn(`Skipped an item in "${sectionName}" without a symbol.`);
-      return null;
-    }
-
-    const amount = parseAmount(item.price);
-    if (amount === null || amount <= 0) {
-      this.logger.warn(
-        `Skipped "${symbol}" in "${sectionName}": the API did not provide a usable price.`,
-      );
-      return null;
-    }
-
-    const unit = priceApi.symbolUnits[symbol] ?? priceApi.sourceUnit;
-    const changePercent = parseAmount(item.change_percent);
-
-    const normalized: MarketPriceItem = {
-      symbol,
-      priceInRial: toRial(amount, unit),
-      changePercent,
-    };
-
-    if (typeof item.name === 'string' && item.name.trim() !== '') {
-      normalized.name = item.name.trim();
-    }
-
-    return normalized;
   }
 
   private delay(ms: number): Promise<void> {

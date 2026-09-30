@@ -4,26 +4,22 @@ import { Cron } from '@nestjs/schedule';
 import { BaleService } from '../bale/bale.service';
 import { DeliveryResult, summarizeDelivery } from '../bale/delivery-result';
 import { describeError } from '../common/log-safety';
-import {
-  tehranDateFa,
-  tehranDayKey,
-  tehranTimeFa,
-  TEHRAN_TIME_ZONE,
-} from '../common/tehran-time';
+import { TEHRAN_TIME_ZONE } from '../common/tehran-time';
+import { MarketEngineService } from '../market/market-engine.service';
+import { PublishableMarketUpdate } from '../market/market.types';
 import { PosterService } from '../poster/poster.service';
 import { PriceService } from '../price/price.service';
 import { PriceMessageBuilder } from './price-message.builder';
-import { TrendTracker } from './trend-tracker';
 
 /**
  * Scheduling and publication orchestration.
  *
- * Phase 0 behaviour:
- *  - every job publishes through `runPublication()`, which refuses to start a second
- *    publication while one is still running (no duplicated message from overlapping runs),
- *  - the price jobs and the poster job no longer share a minute (see the cron table below),
- *  - a failed price API call publishes nothing and logs an error — never a fake success,
- *  - the trend baseline is only advanced after a message was actually delivered somewhere.
+ * Phase 1: prices are never published directly from the API. Every job runs the market
+ * reliability pipeline first (`MarketEngineService`), and only a `publishable` update — built
+ * exclusively from accepted, validated prices — reaches the publishers.
+ *
+ * Phase 0 guarantees kept: Asia/Tehran schedules, one in-flight publication at a time,
+ * truthful delivery reporting, no publication after a failed fetch.
  */
 @Injectable()
 export class BotService implements OnModuleInit {
@@ -34,10 +30,10 @@ export class BotService implements OnModuleInit {
 
   constructor(
     private readonly priceService: PriceService,
+    private readonly marketEngine: MarketEngineService,
     private readonly baleService: BaleService,
     private readonly posterService: PosterService,
     private readonly priceMessageBuilder: PriceMessageBuilder,
-    private readonly trends: TrendTracker,
   ) {}
 
   onModuleInit(): void {
@@ -54,7 +50,7 @@ export class BotService implements OnModuleInit {
     timeZone: TEHRAN_TIME_ZONE,
   })
   async handleHalfHourlyPriceUpdate(): Promise<void> {
-    await this.runPriceUpdate('Price update (half-hourly)');
+    await this.runPublication('Price update (half-hourly)', 'channel-message');
   }
 
   /** Last price message of the day at 22:00 (Asia/Tehran). */
@@ -63,80 +59,36 @@ export class BotService implements OnModuleInit {
     timeZone: TEHRAN_TIME_ZONE,
   })
   async handleDailyClosingPriceUpdate(): Promise<void> {
-    await this.runPriceUpdate('Price update (daily closing)');
+    await this.runPublication(
+      'Price update (daily closing)',
+      'channel-message',
+    );
   }
 
   /**
-   * Poster report three times a day at 12:15, 16:15 and 19:15.
-   *
-   * The report used to run at 12:00/16:00/19:00, i.e. in the exact same minute as the
-   * half-hourly price update, which published two messages to the channel simultaneously.
-   * The times were moved by 15 minutes — the business function itself is unchanged.
+   * Poster report three times a day at 12:15, 16:15 and 19:15 (moved in Phase 0 so it no longer
+   * shares a minute with the half-hourly price update).
    */
   @Cron('15 12,16,19 * * *', {
     name: 'poster-report',
     timeZone: TEHRAN_TIME_ZONE,
   })
   async handlePosterReport(): Promise<void> {
-    await this.runPosterReport('Poster report');
-  }
-
-  private async runPriceUpdate(job: string): Promise<void> {
-    await this.runPublication(job, async () => {
-      const marketData = await this.priceService.getMarketData();
-
-      const now = new Date();
-      const dayKey = tehranDayKey(now);
-
-      if (this.trends.resetForNewDay(dayKey)) {
-        this.logger.log(
-          `New Tehran trading day (${dayKey}): trend baseline reset — the first message ` +
-            'of the day is not compared with yesterday.',
-        );
-      }
-
-      const message = this.priceMessageBuilder.build(marketData, {
-        dayKey,
-        dateFa: tehranDateFa(now),
-        timeFa: tehranTimeFa(now),
-      });
-
-      const results = await this.baleService.sendMessage(message.text);
-
-      // Only advance the trend baseline when the message actually reached a channel.
-      if (summarizeDelivery(results).anySucceeded) {
-        this.trends.commit(message.snapshot, dayKey);
-      } else {
-        this.logger.error(
-          `${job}: nothing was delivered, trend baseline left unchanged.`,
-        );
-      }
-
-      return results;
-    });
-  }
-
-  private async runPosterReport(job: string): Promise<void> {
-    await this.runPublication(job, async () => {
-      const marketData = await this.priceService.getMarketData();
-      const posterText = this.posterService.generatePricePoster(marketData);
-
-      return this.baleService.sendMessage(posterText);
-    });
+    await this.runPublication('Poster report', 'poster');
   }
 
   /**
-   * Single publication gate: guarantees a job is not started twice concurrently and that
-   * delivery results are always reported truthfully.
+   * Runs the reliability pipeline and publishes only an approved update.
+   * `source: 'channel-message' | 'poster'` decides how the approved data is rendered — the
+   * validation path is identical for both.
    */
   private async runPublication(
     job: string,
-    publish: () => Promise<DeliveryResult[]>,
+    renderer: 'channel-message' | 'poster',
   ): Promise<void> {
     if (this.publishing !== null) {
       this.logger.warn(
-        `Skipping "${job}": "${this.publishing}" is still in progress — ` +
-          'no duplicate publication.',
+        `Skipping "${job}": "${this.publishing}" is still in progress — no duplicate publication.`,
       );
       return;
     }
@@ -144,15 +96,68 @@ export class BotService implements OnModuleInit {
     this.publishing = job;
 
     try {
-      const results = await publish();
+      const fetch = await this.priceService.fetchRawPayload();
+      const { update, staleSymbols } = await this.marketEngine.evaluateCycle(
+        fetch.payload,
+        new Date(fetch.receivedAt),
+      );
+
+      this.reportCycle(job, update, staleSymbols.length);
+
+      if (!update.publishable) {
+        this.logger.error(
+          `❌ ${job}: no publishable prices (${update.blockingReason ?? 'unknown reason'}) — ` +
+            'nothing was published.',
+        );
+        return;
+      }
+
+      const text =
+        renderer === 'poster'
+          ? this.posterService.generatePricePoster(update)
+          : this.priceMessageBuilder.build(update);
+
+      const results = await this.baleService.sendMessage(text);
       this.reportDelivery(job, results);
     } catch (error) {
-      // Covers a failed price API call or any unexpected failure: no publication,
-      // no success log.
+      // Fetch failures, schema failures and unexpected errors land here: no publication, no
+      // success log, market state untouched (a rejected price never reaches it).
       this.logger.error(`❌ ${job} failed: ${describeError(error)}`);
     } finally {
       this.publishing = null;
     }
+  }
+
+  private reportCycle(
+    job: string,
+    update: PublishableMarketUpdate,
+    staleCount: number,
+  ): void {
+    const { accepted, rejected, publishable, blockingReason } = update;
+
+    if (rejected.length > 0) {
+      const summary = rejected
+        .map(
+          (evaluation) =>
+            `${evaluation.symbol}:${evaluation.reason ?? 'UNKNOWN'}`,
+        )
+        .join(', ');
+      this.logger.warn(
+        `${job}: ${rejected.length} symbol(s) not published — ${summary}`,
+      );
+    }
+
+    // The count is only called "approved for publication" when the cycle really is publishable;
+    // a blocked cycle never reports success.
+    const status = publishable
+      ? `${accepted.length} validated price(s) approved for publication`
+      : `${accepted.length} validated price(s) accepted but NOT published (` +
+        `${blockingReason ?? 'unknown reason'})`;
+
+    this.logger.log(
+      `${job}: ${status}` +
+        (staleCount > 0 ? `, ${staleCount} symbol(s) currently stale` : ''),
+    );
   }
 
   private reportDelivery(

@@ -1,6 +1,7 @@
 import {
   EnvironmentValidationError,
   parseSymbolUnits,
+  parseThresholdOverrides,
   validateEnvironment,
 } from './env.validation';
 
@@ -107,5 +108,69 @@ describe('parseSymbolUnits', () => {
     expect(() => parseSymbolUnits('USDT_IRT=DOLLAR')).toThrow(
       /Invalid PRICE_SYMBOL_UNITS entry/,
     );
+  });
+});
+
+describe('Phase 1 market reliability variables', () => {
+  const validEnv = () => ({
+    PRICE_API_URL: 'https://api.example.test/prices',
+    BALE_BOT_TOKEN: 'bale-token',
+    BALE_CHANNEL_ID: 'bale-channel',
+  });
+
+  it('applies documented reliability defaults', () => {
+    const env = validateEnvironment(validEnv());
+
+    expect(env.PRICE_MAX_CHANGE_PERCENT).toBe('8');
+    expect(env.PRICE_CROSS_DAY_CHANGE_MULTIPLIER).toBe('2');
+    expect(env.PRICE_STALE_AFTER_MINUTES).toBe('45');
+    expect(env.ANOMALY_ALERT_COOLDOWN_MINUTES).toBe('30');
+    expect(env.MARKET_STATE_FILE).toBe('./data/market-state.json');
+  });
+
+  it('rejects out-of-range thresholds', () => {
+    expect(() =>
+      validateEnvironment({ ...validEnv(), PRICE_MAX_CHANGE_PERCENT: '0' }),
+    ).toThrow(/Invalid PRICE_MAX_CHANGE_PERCENT/);
+    expect(() =>
+      validateEnvironment({ ...validEnv(), PRICE_MAX_CHANGE_PERCENT: '500' }),
+    ).toThrow(/Invalid PRICE_MAX_CHANGE_PERCENT/);
+    expect(() =>
+      validateEnvironment({
+        ...validEnv(),
+        PRICE_CROSS_DAY_CHANGE_MULTIPLIER: '0.5',
+      }),
+    ).toThrow(/Invalid PRICE_CROSS_DAY_CHANGE_MULTIPLIER/);
+  });
+
+  it('accepts a non-integer change percentage', () => {
+    expect(
+      validateEnvironment({ ...validEnv(), PRICE_MAX_CHANGE_PERCENT: '7.5' }),
+    ).toMatchObject({
+      PRICE_MAX_CHANGE_PERCENT: '7.5',
+    });
+  });
+
+  it('rejects malformed threshold overrides', () => {
+    expect(() =>
+      validateEnvironment({
+        ...validEnv(),
+        PRICE_THRESHOLD_OVERRIDES: 'XAUUSD',
+      }),
+    ).toThrow(/Invalid PRICE_THRESHOLD_OVERRIDES entry/);
+    expect(() =>
+      validateEnvironment({
+        ...validEnv(),
+        PRICE_THRESHOLD_OVERRIDES: 'XAUUSD=0',
+      }),
+    ).toThrow(/Invalid PRICE_THRESHOLD_OVERRIDES entry/);
+  });
+
+  it('parses valid threshold overrides', () => {
+    expect(parseThresholdOverrides('XAUUSD=12, TRY=15')).toEqual({
+      XAUUSD: 12,
+      TRY: 15,
+    });
+    expect(parseThresholdOverrides('')).toEqual({});
   });
 });

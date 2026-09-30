@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { isMoneyUnit, MoneyUnit } from '../common/money';
-import { parseSymbolUnits } from './env.validation';
+import { buildSymbolRegistry, SymbolDefinition } from '../market/symbols';
+import { parseSymbolUnits, parseThresholdOverrides } from './env.validation';
 
 export interface PlatformCredentials {
   botToken: string;
@@ -40,6 +41,55 @@ export class AppConfigService {
 
   get deliveryTimeoutMs(): number {
     return this.readInteger('DELIVERY_TIMEOUT_MS', 20_000);
+  }
+
+  // --- Phase 1: market reliability ------------------------------------------
+
+  /** Symbol registry with the configured threshold overrides applied. */
+  get symbolRegistry(): readonly SymbolDefinition[] {
+    return buildSymbolRegistry({
+      defaultMaxChangePercent: this.readNumber('PRICE_MAX_CHANGE_PERCENT', 8),
+      maxChangePercentBySymbol: parseThresholdOverrides(
+        this.configService.get<string>('PRICE_THRESHOLD_OVERRIDES'),
+      ),
+    });
+  }
+
+  /** Extra tolerance applied when the comparison baseline is from a previous Tehran day. */
+  get crossDayChangeMultiplier(): number {
+    return this.readNumber('PRICE_CROSS_DAY_CHANGE_MULTIPLIER', 2);
+  }
+
+  /** Age after which a symbol's state is reported as STALE. */
+  get staleAfterMs(): number {
+    return this.readInteger('PRICE_STALE_AFTER_MINUTES', 45) * 60_000;
+  }
+
+  /** Optional admin chat for operational anomaly alerts (`null` = log only). */
+  get anomalyAlertChatId(): string | null {
+    const value = this.configService.get<string>('ANOMALY_ALERT_CHAT_ID');
+
+    return value === undefined || value === null || String(value).trim() === ''
+      ? null
+      : String(value).trim();
+  }
+
+  /** De-duplication window for identical anomaly alerts. */
+  get anomalyAlertCooldownMinutes(): number {
+    return this.readInteger('ANOMALY_ALERT_COOLDOWN_MINUTES', 30);
+  }
+
+  /** Market state file path (`null` disables persistence). */
+  get marketStateFile(): string | null {
+    const value = this.configService.get<string>('MARKET_STATE_FILE');
+
+    if (value === undefined || value === null) {
+      return null;
+    }
+
+    const trimmed = String(value).trim();
+
+    return trimmed === '' ? null : trimmed;
   }
 
   /** Bale is a required platform: missing credentials fail fast here too. */
@@ -90,6 +140,13 @@ export class AppConfigService {
     const value = Number(raw);
 
     return Number.isInteger(value) && value > 0 ? value : fallback;
+  }
+
+  private readNumber(key: string, fallback: number): number {
+    const raw = this.configService.get<string>(key);
+    const value = Number(raw);
+
+    return Number.isFinite(value) && value > 0 ? value : fallback;
   }
 
   private readMoneyUnit(key: string, fallback: MoneyUnit): MoneyUnit {

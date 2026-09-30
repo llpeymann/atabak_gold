@@ -51,6 +51,9 @@ lerna-debug.log*
 .tmp
 daily-prices.json
 
+# market state persistence (generated at runtime)
+/data
+
 # Runtime data
 pids
 *.pid

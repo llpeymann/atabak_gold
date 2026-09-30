@@ -9,6 +9,9 @@ services:
       - .env
     ports:
       - '3000:3000'
+    volumes:
+      # Persistent market state (MARKET_STATE_FILE) across restarts/redeploys.
+      - atabak-market-state:/app/data
     healthcheck:
       test:
         [
@@ -21,3 +24,6 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+
+volumes:
+  atabak-market-state:

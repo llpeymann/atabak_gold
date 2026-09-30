@@ -3,143 +3,76 @@ import { Injectable } from '@nestjs/common';
 import { AppConfigService } from '../config/app-config.service';
 import { buildBrandFooterLines, MESSAGE_DIVIDER } from '../common/branding';
 import { escapeHtml } from '../common/html';
-import { formatMoney, formatPercentFa } from '../common/money';
-import { MarketData, MarketPriceItem } from '../price/price.interface';
 import {
-  TrendDirection,
-  TrendSnapshotEntry,
-  TrendTracker,
-} from './trend-tracker';
-
-export interface PriceMessageContext {
-  /** Tehran calendar day, e.g. `2026-09-30`. */
-  dayKey: string;
-  /** Persian display date. */
-  dateFa: string;
-  /** Persian display time. */
-  timeFa: string;
-}
-
-export interface BuiltPriceMessage {
-  text: string;
-  /** Prices that become the new comparison baseline once the message is delivered. */
-  snapshot: TrendSnapshotEntry[];
-}
-
-interface SymbolDefinition {
-  symbol: string;
-  label: string;
-}
-
-const TREND_EMOJI: Record<TrendDirection, string> = {
-  unknown: '◽',
-  up: '🔺',
-  down: '🔻',
-  flat: '🔹',
-};
-
-const GOLD_SYMBOLS: readonly SymbolDefinition[] = [
-  { symbol: 'XAUUSD', label: 'اونس جهانی' },
-  { symbol: 'IR_GOLD_18K', label: 'طلای ۱۸ عیار' },
-  { symbol: 'IR_GOLD_24K', label: 'طلای ۲۴ عیار' },
-  { symbol: 'IR_GOLD_MELTED', label: 'آبشده نقدی' },
-];
-
-const COIN_SYMBOLS: readonly SymbolDefinition[] = [
-  { symbol: 'IR_COIN_EMAMI', label: 'سکه امامی' },
-  { symbol: 'IR_COIN_BAHAR', label: 'سکه تمام بهار' },
-  { symbol: 'IR_COIN_HALF', label: 'نیم سکه' },
-  { symbol: 'IR_COIN_QUARTER', label: 'ربع سکه' },
-  { symbol: 'IR_COIN_1G', label: 'سکه گرمی' },
-];
-
-const CURRENCY_SYMBOLS: readonly SymbolDefinition[] = [
-  { symbol: 'USDT_IRT', label: 'تتر (فی)' },
-  { symbol: 'USD', label: '🇺🇸 دلار آمریکا' },
-  { symbol: 'EUR', label: '🇪🇺 یورو' },
-  { symbol: 'GBP', label: '🇬🇧 پوند' },
-  { symbol: 'TRY', label: '🇹🇷 لیر ترکیه' },
-  { symbol: 'AED', label: '🇦🇪 درهم امارات' },
-  { symbol: 'CNY', label: '🇨🇳 یوآن چین' },
-];
+  MarketSection,
+  PublishableMarketUpdate,
+  PublishablePrice,
+} from '../market/market.types';
+import {
+  directionEmoji,
+  formatChangePercent,
+  formatPriceValue,
+} from '../market/price-format';
+import { SECTION_TITLES } from '../market/symbols';
 
 /**
- * Builds the channel price message.
+ * Channel message builder.
  *
- * Kept as a pure, injectable unit (no delivery, no scheduling) so the Phase 0 behaviour
- * — explicit currency units, trend emojis, consistent footer — is directly testable.
+ * Phase 1: the builder only accepts a `PublishableMarketUpdate` — an object produced by the market
+ * reliability pipeline that contains nothing but *approved* prices. It has no access to raw API
+ * data, which makes it structurally impossible to publish an unvalidated or rejected price.
  */
 @Injectable()
 export class PriceMessageBuilder {
-  constructor(
-    private readonly config: AppConfigService,
-    private readonly trends: TrendTracker,
-  ) {}
+  constructor(private readonly config: AppConfigService) {}
 
-  build(data: MarketData, context: PriceMessageContext): BuiltPriceMessage {
-    const displayUnit = this.config.displayUnit;
-    const bySymbol = new Map<string, MarketPriceItem>();
-
-    for (const item of [...data.gold, ...data.currency]) {
-      if (!bySymbol.has(item.symbol)) {
-        bySymbol.set(item.symbol, item);
-      }
+  build(update: PublishableMarketUpdate): string {
+    if (!update.publishable) {
+      throw new Error(
+        `PriceMessageBuilder received a non-publishable update (${update.blockingReason ?? 'unknown reason'}).`,
+      );
     }
-
-    const snapshot: TrendSnapshotEntry[] = [];
-
-    const renderSection = (
-      definitions: readonly SymbolDefinition[],
-    ): string[] => {
-      const lines: string[] = [];
-
-      for (const definition of definitions) {
-        const item = bySymbol.get(definition.symbol);
-        if (!item) {
-          continue;
-        }
-
-        const trend = this.trends.trendFor(
-          definition.symbol,
-          item.priceInRial,
-          context.dayKey,
-        );
-        const percent = formatPercentFa(item.changePercent);
-        const percentSuffix = percent ? ` (${percent})` : '';
-
-        lines.push(
-          `${escapeHtml(definition.label)}: ` +
-            `<b>${escapeHtml(formatMoney(item.priceInRial, displayUnit))}</b> ` +
-            `${TREND_EMOJI[trend]}${percentSuffix}`,
-        );
-
-        snapshot.push({
-          symbol: definition.symbol,
-          priceInRial: item.priceInRial,
-        });
-      }
-
-      return lines;
-    };
 
     const lines: string[] = [
       '📌 <b>گزارش لحظه‌ای بازار</b>',
-      `🕒 ${escapeHtml(context.dateFa)} | ${escapeHtml(context.timeFa)}`,
+      `🕒 ${escapeHtml(update.dateFa)} | ${escapeHtml(update.timeFa)}`,
       MESSAGE_DIVIDER,
-      '🟨 <b>طلا</b>',
-      ...renderSection(GOLD_SYMBOLS),
-      '',
-      '🪙 <b>سکه</b>',
-      ...renderSection(COIN_SYMBOLS),
-      '',
-      // The unit is attached to every single price below, so the old ambiguous
-      // «ارز (تومان)» heading is no longer needed.
-      '💰 <b>بازار ارز</b>',
-      ...renderSection(CURRENCY_SYMBOLS),
-      '',
-      ...buildBrandFooterLines(),
     ];
 
-    return { text: lines.join('\n'), snapshot };
+    let firstSection = true;
+
+    for (const section of ['gold', 'coins', 'currency'] as MarketSection[]) {
+      const prices = update.prices.filter((price) => price.section === section);
+
+      if (prices.length === 0) {
+        continue;
+      }
+
+      if (!firstSection) {
+        lines.push('');
+      }
+      firstSection = false;
+
+      lines.push(SECTION_TITLES[section]);
+
+      for (const price of prices) {
+        lines.push(this.renderPrice(price));
+      }
+    }
+
+    lines.push('', ...buildBrandFooterLines());
+
+    return lines.join('\n');
+  }
+
+  private renderPrice(price: PublishablePrice): string {
+    const percent = formatChangePercent(price.percentageChange);
+    const percentSuffix = percent === null ? '' : ` (${escapeHtml(percent)})`;
+
+    return (
+      `${escapeHtml(price.label)}: ` +
+      `<b>${escapeHtml(formatPriceValue(price.price, price.unit, this.config.displayUnit))}</b> ` +
+      `${directionEmoji(price.direction)}${percentSuffix}`
+    );
   }
 }
