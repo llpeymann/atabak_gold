@@ -96,15 +96,7 @@ export class AppConfigService {
 
   /** Where users and their favorites are persisted (`null` disables persistence). */
   get userDataFile(): string | null {
-    const value = this.configService.get<string>('USER_DATA_FILE');
-
-    if (value === undefined || value === null) {
-      return null;
-    }
-
-    const trimmed = String(value).trim();
-
-    return trimmed === '' ? null : trimmed;
+    return this.optionalPath('USER_DATA_FILE');
   }
 
   /** Maximum favorites per user — the only place this limit is defined (§31, §62). */
@@ -120,6 +112,47 @@ export class AppConfigService {
   /** Official channel URL used by the CTA button (single declaration, §35). */
   get channelUrl(): string {
     return this.readString('CHANNEL_URL', 'https://ble.ir/tala_atabak');
+  }
+
+  // --- Phase 3: price alerts -------------------------------------------------
+
+  /** Where alerts and delivery records are persisted (`null` disables persistence). */
+  get alertsDataFile(): string | null {
+    return this.optionalPath('ALERTS_DATA_FILE');
+  }
+
+  /** Maximum live alerts per user (the only place this limit is defined, §35). */
+  get maxAlertsPerUser(): number {
+    return this.readInteger('MAX_ALERTS_PER_USER', 5);
+  }
+
+  /** Extra attempts after the first delivery failure (total attempts = 1 + retries). */
+  get alertNotificationMaxRetries(): number {
+    // `0` is a meaningful value here ("no retry"), so it must not fall back to the default.
+    return this.readNonNegativeInteger('ALERT_NOTIFICATION_MAX_RETRIES', 3);
+  }
+
+  /** Delay between two notification attempts, in milliseconds (`0` = immediate). */
+  get alertNotificationRetryDelayMs(): number {
+    return this.readNonNegativeInteger(
+      'ALERT_NOTIFICATION_RETRY_DELAY_MS',
+      5_000,
+    );
+  }
+
+  /** Lower bound of a percentage alert magnitude (documented safety bound, §90). */
+  get alertMinTargetPercent(): number {
+    return this.readNumber('ALERT_MIN_TARGET_PERCENT', 0.01);
+  }
+
+  /** Upper bound of a percentage alert magnitude (documented safety bound, §90). */
+  get alertMaxTargetPercent(): number {
+    return this.readNumber('ALERT_MAX_TARGET_PERCENT', 100);
+  }
+
+  /** In-memory alert wizard lifetime; an abandoned wizard is dropped after this. */
+  get alertWizardTtlMs(): number {
+    return this.readInteger('ALERT_WIZARD_TTL_MINUTES', 15) * 60_000;
   }
 
   /** Inbound interaction switch: `false` keeps the pre-Phase-2 publish-only behaviour. */
@@ -203,6 +236,19 @@ export class AppConfigService {
     return String(value).trim();
   }
 
+  /** Optional filesystem path: a blank value disables the feature (returns `null`). */
+  private optionalPath(key: string): string | null {
+    const value = this.configService.get<string>(key);
+
+    if (value === undefined || value === null) {
+      return null;
+    }
+
+    const trimmed = String(value).trim();
+
+    return trimmed === '' ? null : trimmed;
+  }
+
   private readString(key: string, fallback: string): string {
     const value = this.configService.get<string>(key);
 
@@ -216,6 +262,17 @@ export class AppConfigService {
     const value = Number(raw);
 
     return Number.isInteger(value) && value > 0 ? value : fallback;
+  }
+
+  /**
+   * Like {@link readInteger}, but `0` is a valid configured value (used where "off"/"immediately"
+   * is a documented option, e.g. notification retries).
+   */
+  private readNonNegativeInteger(key: string, fallback: number): number {
+    const raw = this.configService.get<string>(key);
+    const value = Number(raw);
+
+    return Number.isInteger(value) && value >= 0 ? value : fallback;
   }
 
   private readNumber(key: string, fallback: number): number {

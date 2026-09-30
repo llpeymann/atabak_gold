@@ -1,6 +1,17 @@
-import { Keyboard } from '../../platform/platform.types';
+import { Keyboard, KeyboardRow } from '../../platform/platform.types';
 import { FavoritesManageView } from './ux-view.types';
 import {
+  callbackDataForAlertCancel,
+  callbackDataForAlertConfirm,
+  callbackDataForAlertDelete,
+  callbackDataForAlertDeleteConfirm,
+  callbackDataForAlertEdit,
+  callbackDataForAlertList,
+  callbackDataForAlertNew,
+  callbackDataForAlertStatus,
+  callbackDataForAlertSymbol,
+  callbackDataForAlertType,
+  callbackDataForAlertView,
   callbackDataForBack,
   callbackDataForFavorite,
   callbackDataForHome,
@@ -8,6 +19,8 @@ import {
   callbackDataForScreen,
   ScreenKey,
 } from './callback-data';
+import { AlertStatus } from '../../alerts/alert.types';
+import { SymbolDefinition } from '../../market/symbols';
 
 /**
  * Keyboards (pure builders).
@@ -126,4 +139,172 @@ export function favoritesManageKeyboard(view: FavoritesManageView): Keyboard {
   ]);
 
   return [...rows, ...screenFooter()];
+}
+
+// --- Phase 3: alerts ---------------------------------------------------------
+
+/**
+ * Alert hub (§23): create, list, and the usual way back. The main menu still owns the
+ * `🔔 هشدار` entry point, so no second navigation system is introduced.
+ */
+export function alertsKeyboard(): Keyboard {
+  return [
+    [
+      { text: '➕ ساخت هشدار', callbackData: callbackDataForAlertNew() },
+      { text: '🔔 هشدارهای من', callbackData: callbackDataForAlertList() },
+    ],
+    ...screenFooter(),
+  ];
+}
+
+/** Symbol picker of the wizard — only symbols that exist in the canonical registry (§21/§25). */
+export function alertSymbolKeyboard(
+  definitions: readonly SymbolDefinition[],
+): Keyboard {
+  const rows = definitions.map((definition) => [
+    {
+      text: `${
+        definition.section === 'gold'
+          ? '🟡'
+          : definition.section === 'coins'
+            ? '🪙'
+            : '💵'
+      } ${definition.label}`.trim(),
+      callbackData: callbackDataForAlertSymbol(definition.symbol),
+    },
+  ]);
+
+  return [...rows, ...screenFooter()];
+}
+
+/** Alert type picker: the two absolute conditions and the two percentage directions (§26). */
+export function alertTypeKeyboard(): Keyboard {
+  return [
+    [
+      {
+        text: '📈 رسیدن به قیمت بالاتر',
+        callbackData: callbackDataForAlertType('above'),
+      },
+    ],
+    [
+      {
+        text: '📉 افت به قیمت پایین‌تر',
+        callbackData: callbackDataForAlertType('below'),
+      },
+    ],
+    [
+      {
+        text: '📈 افزایش درصدی',
+        callbackData: callbackDataForAlertType('up'),
+      },
+      {
+        text: '📉 کاهش درصدی',
+        callbackData: callbackDataForAlertType('down'),
+      },
+    ],
+    ...screenFooter(),
+  ];
+}
+
+/** Target input step: the user types a number, the wizard consumes the next message. */
+export function alertTargetInputKeyboard(): Keyboard {
+  return [
+    [{ text: '❌ لغو', callbackData: callbackDataForAlertCancel() }],
+    ...screenFooter(),
+  ];
+}
+
+/** Confirmation step (§31): nothing is persisted before this explicit press. */
+export function alertConfirmKeyboard(): Keyboard {
+  return [
+    [
+      { text: '✅ تأیید', callbackData: callbackDataForAlertConfirm() },
+      { text: '❌ لغو', callbackData: callbackDataForAlertCancel() },
+    ],
+  ];
+}
+
+export function alertsListKeyboard(
+  alerts: readonly { id: string; label: string; status: AlertStatus }[],
+): Keyboard {
+  const rows = alerts.map((alert) => [
+    {
+      text: `${alert.status === 'TRIGGERED' ? '✅' : alert.status === 'DISABLED' ? '🔕' : '🔔'} ${alert.label}`,
+      callbackData: callbackDataForAlertView(alert.id),
+    },
+  ]);
+
+  return [
+    [{ text: '➕ ساخت هشدار', callbackData: callbackDataForAlertNew() }],
+    ...rows,
+    ...screenFooter(),
+  ];
+}
+
+/** Actions allowed for the current status (§40): a triggered one-shot alert can only be deleted. */
+export function alertDetailKeyboard(
+  status: AlertStatus,
+  alertId: string,
+): Keyboard {
+  const actions: KeyboardRow[] = [];
+
+  if (status === 'ACTIVE') {
+    actions.push([
+      {
+        text: '🔕 غیرفعال',
+        callbackData: callbackDataForAlertStatus('disable', alertId),
+      },
+      { text: '✏️ ویرایش', callbackData: callbackDataForAlertEdit(alertId) },
+    ]);
+  } else if (status === 'DISABLED') {
+    actions.push([
+      {
+        text: '🔔 فعال کردن',
+        callbackData: callbackDataForAlertStatus('enable', alertId),
+      },
+      { text: '✏️ ویرایش', callbackData: callbackDataForAlertEdit(alertId) },
+    ]);
+  }
+
+  actions.push([
+    { text: '🗑 حذف', callbackData: callbackDataForAlertDelete(alertId) },
+  ]);
+
+  return [
+    [{ text: '🔔 هشدارهای من', callbackData: callbackDataForAlertList() }],
+    ...actions,
+    ...screenFooter(),
+  ];
+}
+
+export function alertDeleteConfirmKeyboard(alertId: string): Keyboard {
+  return [
+    [
+      {
+        text: '🗑 بله، حذف شود',
+        callbackData: callbackDataForAlertDeleteConfirm(alertId),
+      },
+      { text: '↩️ انصراف', callbackData: callbackDataForAlertView(alertId) },
+    ],
+  ];
+}
+
+export function alertCreatedKeyboard(): Keyboard {
+  return [
+    [
+      { text: '🔔 هشدارهای من', callbackData: callbackDataForAlertList() },
+      { text: '➕ ساخت هشدار', callbackData: callbackDataForAlertNew() },
+    ],
+    ...screenFooter(),
+  ];
+}
+
+export function alertCanceledKeyboard(): Keyboard {
+  return [
+    [
+      { text: '➕ ساخت هشدار', callbackData: callbackDataForAlertNew() },
+      { text: '🔔 هشدارهای من', callbackData: callbackDataForAlertList() },
+    ],
+    ...screenFooter(),
+  ];
 }

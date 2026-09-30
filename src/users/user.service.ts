@@ -34,8 +34,12 @@ export class UserService {
   }
 
   /** Resolve or create the user behind the platform identity. */
-  async resolveUser(platform: Platform, platformUserId: string): Promise<User> {
-    return this.store.upsertUser(platformUserId, platform);
+  async resolveUser(
+    platform: Platform,
+    platformUserId: string,
+    chatId: string | null = null,
+  ): Promise<User> {
+    return this.store.upsertUser(platformUserId, platform, chatId);
   }
 
   /** Valid symbols come from the Phase 1 registry — no duplicate list exists in the bot. */

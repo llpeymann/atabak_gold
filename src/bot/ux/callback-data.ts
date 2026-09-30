@@ -10,6 +10,10 @@
  *    identity resolved server-side.
  */
 
+import { AlertTypeKey, isAlertTypeKey } from './alert-callback.types';
+
+export type { AlertTypeKey } from './alert-callback.types';
+
 export const CALLBACK_VERSION = 'v1';
 
 export type ScreenKey =
@@ -25,6 +29,21 @@ export const SCREEN_KEYS: readonly ScreenKey[] = [
   'channel',
 ];
 
+/** Alert actions exposed by buttons (Phase 3 §23–§40). */
+export type AlertCallbackAction =
+  | { kind: 'alert-new' }
+  | { kind: 'alert-list' }
+  | { kind: 'alert-symbol'; symbol: string }
+  | { kind: 'alert-type'; type: AlertTypeKey }
+  | { kind: 'alert-confirm' }
+  | { kind: 'alert-cancel' }
+  | { kind: 'alert-view'; alertId: string }
+  | { kind: 'alert-enable'; alertId: string }
+  | { kind: 'alert-disable'; alertId: string }
+  | { kind: 'alert-edit'; alertId: string }
+  | { kind: 'alert-delete'; alertId: string }
+  | { kind: 'alert-delete-confirm'; alertId: string };
+
 export type CallbackAction =
   | { kind: 'menu' }
   | { kind: 'home' }
@@ -32,7 +51,8 @@ export type CallbackAction =
   | { kind: 'noop' }
   | { kind: 'screen'; screen: ScreenKey }
   | { kind: 'manage-favorites' }
-  | { kind: 'favorite'; op: 'add' | 'remove'; symbol: string };
+  | { kind: 'favorite'; op: 'add' | 'remove'; symbol: string }
+  | AlertCallbackAction;
 
 /** Symbols are uppercase registry ids; anything else is rejected before touching the store. */
 const SYMBOL_PATTERN = /^[A-Z0-9_]{1,32}$/;
@@ -68,6 +88,82 @@ export function callbackDataForFavorite(
   return `${CALLBACK_VERSION}:fav:${op}:${symbol}`;
 }
 
+export function callbackDataForAlertNew(): string {
+  return `${CALLBACK_VERSION}:alert:new`;
+}
+
+export function callbackDataForAlertList(): string {
+  return `${CALLBACK_VERSION}:alert:list`;
+}
+
+export function callbackDataForAlertSymbol(symbol: string): string {
+  return `${CALLBACK_VERSION}:alert:sym:${symbol}`;
+}
+
+export function callbackDataForAlertType(type: AlertTypeKey): string {
+  return `${CALLBACK_VERSION}:alert:type:${type}`;
+}
+
+export function callbackDataForAlertConfirm(): string {
+  return `${CALLBACK_VERSION}:alert:confirm`;
+}
+
+export function callbackDataForAlertCancel(): string {
+  return `${CALLBACK_VERSION}:alert:cancel`;
+}
+
+export function callbackDataForAlertView(alertId: string): string {
+  return `${CALLBACK_VERSION}:alert:view:${alertId}`;
+}
+
+export function callbackDataForAlertStatus(
+  op: 'enable' | 'disable',
+  alertId: string,
+): string {
+  return `${CALLBACK_VERSION}:alert:${op}:${alertId}`;
+}
+
+export function callbackDataForAlertEdit(alertId: string): string {
+  return `${CALLBACK_VERSION}:alert:edit:${alertId}`;
+}
+
+export function callbackDataForAlertDelete(alertId: string): string {
+  return `${CALLBACK_VERSION}:alert:del:${alertId}`;
+}
+
+export function callbackDataForAlertDeleteConfirm(alertId: string): string {
+  return `${CALLBACK_VERSION}:alert:delok:${alertId}`;
+}
+
+/** Alert ids are generated internally; this is the shape a callback may carry. */
+const ALERT_ID_PATTERN = /^alr_[a-z0-9_]{1,40}$/;
+
+export function isSafeAlertId(value: string): boolean {
+  return ALERT_ID_PATTERN.test(value);
+}
+
+const ALERT_ACTION_KINDS: readonly AlertCallbackAction['kind'][] = [
+  'alert-new',
+  'alert-list',
+  'alert-symbol',
+  'alert-type',
+  'alert-confirm',
+  'alert-cancel',
+  'alert-view',
+  'alert-enable',
+  'alert-disable',
+  'alert-edit',
+  'alert-delete',
+  'alert-delete-confirm',
+];
+
+/** Narrow a parsed callback to an alert action (used by the router's dispatch). */
+export function isAlertAction(
+  action: CallbackAction,
+): action is AlertCallbackAction {
+  return (ALERT_ACTION_KINDS as readonly string[]).includes(action.kind);
+}
+
 export function isScreenKey(value: string): value is ScreenKey {
   return (SCREEN_KEYS as readonly string[]).includes(value);
 }
@@ -81,6 +177,73 @@ export function isSafeSymbol(value: string): boolean {
  * version — the caller answers with a safe "this option is no longer valid" screen instead of
  * crashing (§40).
  */
+/**
+ * Alert actions. Every payload is validated here (shape + symbol/id format) before it can reach
+ * the domain layer: a modified button can never address another user's alert, because ownership
+ * is resolved server-side from the platform identity (§68).
+ */
+function parseAlertAction(tail: readonly string[]): CallbackAction | null {
+  const [head, ...rest] = tail;
+
+  switch (head) {
+    case 'new':
+      return rest.length === 0 ? { kind: 'alert-new' } : null;
+    case 'list':
+      return rest.length === 0 ? { kind: 'alert-list' } : null;
+    case 'confirm':
+      return rest.length === 0 ? { kind: 'alert-confirm' } : null;
+    case 'cancel':
+      return rest.length === 0 ? { kind: 'alert-cancel' } : null;
+    case 'sym': {
+      const [symbol, ...extra] = rest;
+
+      return extra.length === 0 && symbol !== undefined && isSafeSymbol(symbol)
+        ? { kind: 'alert-symbol', symbol }
+        : null;
+    }
+    case 'type': {
+      const [type, ...extra] = rest;
+
+      return extra.length === 0 && type !== undefined && isAlertTypeKey(type)
+        ? { kind: 'alert-type', type }
+        : null;
+    }
+    case 'view':
+    case 'edit':
+    case 'del':
+    case 'delok':
+    case 'enable':
+    case 'disable': {
+      const [alertId, ...extra] = rest;
+
+      if (
+        extra.length > 0 ||
+        alertId === undefined ||
+        !isSafeAlertId(alertId)
+      ) {
+        return null;
+      }
+
+      switch (head) {
+        case 'view':
+          return { kind: 'alert-view', alertId };
+        case 'edit':
+          return { kind: 'alert-edit', alertId };
+        case 'del':
+          return { kind: 'alert-delete', alertId };
+        case 'delok':
+          return { kind: 'alert-delete-confirm', alertId };
+        case 'enable':
+          return { kind: 'alert-enable', alertId };
+        default:
+          return { kind: 'alert-disable', alertId };
+      }
+    }
+    default:
+      return null;
+  }
+}
+
 export function parseCallbackData(
   data: string | null | undefined,
 ): CallbackAction | null {
@@ -112,6 +275,9 @@ export function parseCallbackData(
       return extra.length === 0 && key !== undefined && isScreenKey(key)
         ? { kind: 'screen', screen: key }
         : null;
+    }
+    case 'alert': {
+      return parseAlertAction(tail);
     }
     case 'fav': {
       const [op, ...extra] = tail;

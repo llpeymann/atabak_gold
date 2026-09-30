@@ -112,10 +112,15 @@ export class UserStore {
     return user ? { ...user } : null;
   }
 
-  /** Resolve (or create) the user behind a platform identity. */
+  /**
+   * Resolve (or create) the user behind a platform identity.
+   * `chatId` is refreshed on every interaction so notifications always target a chat the bot has
+   * seen (an older record without one keeps working via the platform identity fallback).
+   */
   async upsertUser(
     platformUserId: string,
     platform: User['platform'],
+    chatId: string | null = null,
   ): Promise<User> {
     await this.ensureLoaded();
 
@@ -123,7 +128,11 @@ export class UserStore {
     const now = new Date().toISOString();
 
     if (existing) {
-      const updated: User = { ...existing, updatedAt: now };
+      const updated: User = {
+        ...existing,
+        chatId: chatId ?? existing.chatId ?? null,
+        updatedAt: now,
+      };
       this.users.set(updated.id, updated);
       await this.persist();
 
@@ -134,6 +143,7 @@ export class UserStore {
       id: this.nextId('usr'),
       platform,
       platformUserId,
+      chatId,
       createdAt: now,
       updatedAt: now,
     };
@@ -283,11 +293,20 @@ export class UserStore {
   private isUserShape(value: unknown): value is User {
     const candidate = value as Partial<User> | null;
 
-    return (
-      typeof candidate?.id === 'string' &&
-      typeof candidate.platformUserId === 'string' &&
-      (candidate.platform === 'bale' || candidate.platform === 'telegram')
-    );
+    if (
+      typeof candidate?.id !== 'string' ||
+      typeof candidate.platformUserId !== 'string' ||
+      (candidate.platform !== 'bale' && candidate.platform !== 'telegram')
+    ) {
+      return false;
+    }
+
+    // Records persisted before Phase 3 have no chat id: normalize instead of dropping them.
+    if (typeof candidate.chatId !== 'string') {
+      candidate.chatId = null;
+    }
+
+    return true;
   }
 
   private isFavoriteShape(value: unknown): value is Favorite {

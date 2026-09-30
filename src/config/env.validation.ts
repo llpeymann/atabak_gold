@@ -64,6 +64,20 @@ export const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   BOT_POLL_TIMEOUT_SECONDS: '25',
   // Delay between two polling attempts after a transport failure.
   BOT_POLL_RETRY_DELAY_MS: '3000',
+  // --- Phase 3: price alerts ---
+  // Where alerts and their delivery records are persisted (empty string disables persistence).
+  ALERTS_DATA_FILE: './data/alerts.json',
+  // Maximum number of live alerts per user (ACTIVE + DISABLED count, TRIGGERED/DELETED do not).
+  MAX_ALERTS_PER_USER: '5',
+  // Extra send attempts after the first delivery failure (0 = no retry at all).
+  ALERT_NOTIFICATION_MAX_RETRIES: '3',
+  // Delay between two notification attempts.
+  ALERT_NOTIFICATION_RETRY_DELAY_MS: '5000',
+  // Safety bounds for the magnitude of a percentage alert (documented, configurable).
+  ALERT_MIN_TARGET_PERCENT: '0.01',
+  ALERT_MAX_TARGET_PERCENT: '100',
+  // How long an unfinished "create alert" wizard may stay open before it is dropped.
+  ALERT_WIZARD_TTL_MINUTES: '15',
 };
 
 const logger = new Logger('EnvironmentValidation');
@@ -360,6 +374,48 @@ export function validateEnvironment(
     300_000,
   );
   env.CHANNEL_URL = readUrl(env, 'CHANNEL_URL');
+
+  env.MAX_ALERTS_PER_USER = readInteger(env, 'MAX_ALERTS_PER_USER', 1, 100);
+  env.ALERT_NOTIFICATION_MAX_RETRIES = readInteger(
+    env,
+    'ALERT_NOTIFICATION_MAX_RETRIES',
+    0,
+    10,
+  );
+  env.ALERT_NOTIFICATION_RETRY_DELAY_MS = readInteger(
+    env,
+    'ALERT_NOTIFICATION_RETRY_DELAY_MS',
+    0,
+    600_000,
+  );
+  env.ALERT_MIN_TARGET_PERCENT = readNumber(
+    env,
+    'ALERT_MIN_TARGET_PERCENT',
+    0.0001,
+    50,
+  );
+  env.ALERT_MAX_TARGET_PERCENT = readNumber(
+    env,
+    'ALERT_MAX_TARGET_PERCENT',
+    0.001,
+    1000,
+  );
+
+  if (
+    Number(env.ALERT_MIN_TARGET_PERCENT) > Number(env.ALERT_MAX_TARGET_PERCENT)
+  ) {
+    throw new EnvironmentValidationError(
+      'Invalid alert percentage bounds: ALERT_MIN_TARGET_PERCENT must not exceed ' +
+        'ALERT_MAX_TARGET_PERCENT',
+    );
+  }
+
+  env.ALERT_WIZARD_TTL_MINUTES = readInteger(
+    env,
+    'ALERT_WIZARD_TTL_MINUTES',
+    1,
+    10_080,
+  );
 
   env.PRICE_API_UNIT = readMoneyUnit(env, 'PRICE_API_UNIT');
   env.PRICE_DISPLAY_UNIT = readMoneyUnit(env, 'PRICE_DISPLAY_UNIT');

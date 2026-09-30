@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 
-import { createMarketHarness } from '../testing/test-doubles';
+import { createMarketHarness, MarketHarness } from '../testing/test-doubles';
 import { formatPriceValue } from './price-format';
 
 /**
@@ -25,6 +25,16 @@ const basePayload = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const at = (iso: string) => new Date(iso);
+
+function goldStateOf(
+  harness: MarketHarness,
+): { currentPrice: number | null } | null {
+  const definition = harness.config.symbolRegistry.find(
+    (candidate: { symbol: string }) => candidate.symbol === 'IR_GOLD_18K',
+  );
+
+  return definition ? harness.marketState.getState(definition) : null;
+}
 
 describe('MarketEngineService (integration)', () => {
   beforeEach(() => {
@@ -358,5 +368,119 @@ describe('MarketEngineService (integration)', () => {
       '۱۷٬۰۰۰٬۰۰۰ ریال',
     );
     expect(formatPriceValue(ounce.price, ounce.unit, 'RIAL')).toContain('دلار');
+  });
+
+  describe('downstream listener hook (Phase 3 integration point)', () => {
+    it('publishes every accepted price to a registered listener', async () => {
+      const harness = createMarketHarness();
+      const events: {
+        symbol: string;
+        price: number;
+        previousPrice: number | null;
+      }[] = [];
+
+      harness.engine.registerUpdateListener({
+        onMarketPricesCommitted: (committed) => {
+          for (const event of committed) {
+            events.push({
+              symbol: event.symbol,
+              price: event.price,
+              previousPrice: event.previousPrice,
+            });
+          }
+        },
+      });
+
+      await harness.engine.evaluateCycle(
+        basePayload(),
+        at('2026-09-30T08:00:00Z'),
+      );
+
+      expect(events.map((event) => event.symbol)).toContain('IR_GOLD_18K');
+      // Only accepted prices: the rejected symbol never appears.
+      expect(events.every((event) => Number.isFinite(event.price))).toBe(true);
+      expect(events.every((event) => event.price > 0)).toBe(true);
+    });
+
+    it('never notifies a listener about rejected or missing symbols', async () => {
+      const harness = createMarketHarness();
+      const symbols: string[] = [];
+
+      harness.engine.registerUpdateListener({
+        onMarketPricesCommitted: (committed) => {
+          symbols.push(...committed.map((event) => event.symbol));
+        },
+      });
+
+      // A first cycle establishes the comparison baseline for both symbols.
+      await harness.engine.evaluateCycle(
+        basePayload(),
+        at('2026-09-30T08:00:00Z'),
+      );
+      symbols.length = 0;
+
+      // Then: a valid gold price, an anomalous ounce jump, and no currency data at all.
+      await harness.engine.evaluateCycle(
+        {
+          gold: [
+            { symbol: 'IR_GOLD_18K', price: 17_100_000 },
+            { symbol: 'XAUUSD', price: 4_025 * 1.5 },
+          ],
+          currency: [],
+        },
+        at('2026-09-30T09:00:00Z'),
+      );
+
+      expect(symbols).toEqual(['IR_GOLD_18K']);
+      expect(symbols).not.toContain('XAUUSD');
+      expect(symbols).not.toContain('USD');
+    });
+
+    it('keeps the cycle and the publication intact when a listener throws', async () => {
+      const harness = createMarketHarness();
+
+      harness.engine.registerUpdateListener({
+        onMarketPricesCommitted: () => {
+          throw new Error('listener exploded');
+        },
+      });
+
+      const result = await harness.engine.evaluateCycle(
+        basePayload(),
+        at('2026-09-30T08:00:00Z'),
+      );
+
+      expect(result.update.publishable).toBe(true);
+      expect(result.update.prices.length).toBeGreaterThan(0);
+      expect(goldStateOf(harness)?.currentPrice).toBe(17_000_000);
+    });
+
+    it('delivers the previous accepted price used for crossing checks', async () => {
+      const harness = createMarketHarness();
+      const seen: (number | null)[] = [];
+
+      harness.engine.registerUpdateListener({
+        onMarketPricesCommitted: (committed) => {
+          const event = committed.find((item) => item.symbol === 'IR_GOLD_18K');
+          if (event) {
+            seen.push(event.previousPrice);
+          }
+        },
+      });
+
+      await harness.engine.evaluateCycle(
+        basePayload(),
+        at('2026-09-30T08:00:00Z'),
+      );
+      await harness.engine.evaluateCycle(
+        basePayload(),
+        at('2026-09-30T09:00:00Z'),
+      );
+
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toBeNull();
+      expect(seen[1]).toBe(17_000_000);
+      expect(harness.marketState).toBeDefined();
+    });
   });
 });

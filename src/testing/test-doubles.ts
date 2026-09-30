@@ -6,6 +6,9 @@ import { HttpService } from '@nestjs/axios';
 
 import { BaleService } from '../bale/bale.service';
 import { DeliveryResult } from '../bale/delivery-result';
+import { AlertNotificationService } from '../alerts/alert-notification.service';
+import { AlertService } from '../alerts/alert.service';
+import { AlertStore } from '../alerts/alert.store';
 import { BotUxService } from '../bot/ux/bot-ux.service';
 import { MarketViewService } from '../bot/ux/market-view.service';
 import { UxEventLogService } from '../bot/ux/ux-event-log.service';
@@ -241,6 +244,13 @@ export interface PlatformHarness {
   queueUpdates: (updates: InboundUpdate[]) => void;
   /** Make `editMessageText` fail (platforms refuse edits on old messages). */
   failEdits: (fail: boolean) => void;
+  /**
+   * Make the next `failures` **sends** fail (Phase 3 notification reliability): used to exercise
+   * retries and the "bounded attempts" rule without any real platform call.
+   */
+  failSends: (failures: number) => void;
+  /** Reject the next `failures` sends with a thrown transport error instead of a failed result. */
+  throwSends: (failures: number) => void;
 }
 
 /**
@@ -256,6 +266,8 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
   let queued: InboundUpdate[] = [];
   let messageId = 1000;
   let editsFail = false;
+  let sendsToFail = 0;
+  let sendsToThrow = 0;
 
   const getUpdates = jest.fn((platform: Platform, offset: number) => {
     calls.push({ kind: 'poll', platform, chatId: '', messageId: offset });
@@ -276,21 +288,44 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
       markup?: WireKeyboard | null,
     ): Promise<PlatformSendResult> => {
       const id = ++messageId;
+      const failing = sendsToFail > 0;
+      const throwing = sendsToThrow > 0;
+
+      if (failing) {
+        sendsToFail -= 1;
+      }
+
+      if (throwing) {
+        sendsToThrow -= 1;
+        calls.push({
+          kind: 'send',
+          platform,
+          chatId,
+          text,
+          markup: markup ?? null,
+          messageId: null,
+          success: false,
+        });
+        return Promise.reject(new Error('transport failure'));
+      }
+
       calls.push({
         kind: 'send',
         platform,
         chatId,
         text,
         markup: markup ?? null,
-        messageId: id,
-        success: true,
+        messageId: failing ? null : id,
+        success: !failing,
       });
+
       return Promise.resolve({
         platform,
         chatId,
-        success: true,
+        success: !failing,
         edited: false,
-        messageId: id,
+        messageId: failing ? null : id,
+        ...(failing ? { error: 'HTTP 502 — Bad Gateway' } : {}),
       });
     },
   );
@@ -365,6 +400,12 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
     failEdits: (fail) => {
       editsFail = fail;
     },
+    failSends: (failures) => {
+      sendsToFail = failures;
+    },
+    throwSends: (failures) => {
+      sendsToThrow = failures;
+    },
   };
 }
 
@@ -376,6 +417,9 @@ export interface UxHarness {
   users: UserService;
   views: MarketViewService;
   events: UxEventLogService;
+  alerts: AlertService;
+  alertStore: AlertStore;
+  notifications: AlertNotificationService;
   botUx: BotUxService;
   /** Rendered platform calls of a given kind. */
   rendered: () => PlatformCall[];
@@ -388,7 +432,7 @@ export interface UxHarness {
 /** Complete Phase 2 UX stack (user store → views → router → platform adapters). */
 export function createUxHarness(
   env: EnvMap = {},
-  options: { store?: UserStore } = {},
+  options: { store?: UserStore; alertStore?: AlertStore } = {},
 ): UxHarness {
   const config = createAppConfigService(env);
   const market = createMarketHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
@@ -400,12 +444,27 @@ export function createUxHarness(
   const users = new UserService(config, store);
   const views = new MarketViewService(config, market.marketState, users);
   const events = new UxEventLogService();
+  const alertStore = options.alertStore ?? new AlertStore(config);
+  const alerts = new AlertService(
+    config,
+    alertStore,
+    market.marketState,
+    store,
+  );
+  const notifications = new AlertNotificationService(
+    config,
+    alerts,
+    alertStore,
+    platform.registry,
+    store,
+  );
   const botUx = new BotUxService(
     config,
     platform.registry,
     views,
     users,
     events,
+    alerts,
   );
 
   const rendered = (): PlatformCall[] =>
@@ -421,6 +480,9 @@ export function createUxHarness(
     users,
     views,
     events,
+    alerts,
+    alertStore,
+    notifications,
     botUx,
     rendered,
     last: () => {

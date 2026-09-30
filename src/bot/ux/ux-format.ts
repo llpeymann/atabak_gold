@@ -293,19 +293,6 @@ export function formatFavoritesManageScreen(view: FavoritesManageView): string {
   return lines.join('\n');
 }
 
-/**
- * Alert placeholder — UX only.
- * The alert engine (creation, thresholds, scheduling, triggering, persistence) is Phase 3 and
- * is intentionally not implemented here (§34, §67).
- */
-export function formatAlertsPlaceholder(): string {
-  return (
-    '🔔 <b>هشدار قیمت</b>\n\n' +
-    'این قابلیت بهزودی فعال میشود.\n\n' +
-    'بهزودی میتوانید برای قیمتهای موردنظر خودتان هشدار تنظیم کنید.'
-  );
-}
-
 /** Channel CTA — the handle and the URL come from the central configuration (§35). */
 export function formatChannelScreen(channelHandle: string): string {
   return (

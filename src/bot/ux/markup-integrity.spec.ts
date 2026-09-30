@@ -1,5 +1,11 @@
 import {
+  callbackDataForAlertConfirm,
+  callbackDataForAlertList,
+  callbackDataForAlertNew,
+  callbackDataForAlertSymbol,
+  callbackDataForAlertType,
   callbackDataForFavorite,
+  callbackDataForManageFavorites,
   callbackDataForScreen,
 } from './callback-data';
 import {
@@ -85,7 +91,7 @@ function assertCleanMarkup(text: string, screen: string): void {
 
 interface Scenario {
   name: string;
-  prepare?: (harness: UxHarness) => Promise<void>;
+  prepare?: (harness: UxHarness) => Promise<void> | void;
   update: () => InboundMessage | InboundCallback;
 }
 
@@ -129,11 +135,61 @@ const scenarios: Scenario[] = [
   },
   {
     name: 'favorites management',
-    update: () => callback(callbackDataForScreen('favoritesManage')),
+    update: () => callback(callbackDataForManageFavorites()),
   },
   {
-    name: 'alerts placeholder',
+    name: 'alerts hub',
     update: () => callback(callbackDataForScreen('alerts')),
+  },
+  {
+    name: 'my alerts (empty)',
+    update: () => callback(callbackDataForAlertList()),
+  },
+  {
+    name: 'alert wizard — symbol step',
+    update: () => callback(callbackDataForAlertNew()),
+  },
+  {
+    name: 'alert wizard — type step',
+    update: () => callback(callbackDataForAlertSymbol('IR_GOLD_18K')),
+  },
+  {
+    name: 'alert wizard — target step',
+    prepare: async (harness) => {
+      await harness.botUx.handleUpdate(
+        callback(callbackDataForAlertSymbol('IR_GOLD_18K')),
+      );
+      return Promise.resolve();
+    },
+    update: () => callback(callbackDataForAlertType('above')),
+  },
+  {
+    name: 'alert confirmation',
+    prepare: async (harness) => {
+      await harness.botUx.handleUpdate(
+        callback(callbackDataForAlertSymbol('IR_GOLD_18K')),
+      );
+      await harness.botUx.handleUpdate(
+        callback(callbackDataForAlertType('above')),
+      );
+      await harness.botUx.handleUpdate(message('17,500,000'));
+      return Promise.resolve();
+    },
+    update: () => callback(callbackDataForAlertList()),
+  },
+  {
+    name: 'alert created',
+    prepare: async (harness) => {
+      await harness.botUx.handleUpdate(
+        callback(callbackDataForAlertSymbol('IR_GOLD_18K')),
+      );
+      await harness.botUx.handleUpdate(
+        callback(callbackDataForAlertType('up')),
+      );
+      await harness.botUx.handleUpdate(message('2'));
+      return Promise.resolve();
+    },
+    update: () => callback(callbackDataForAlertConfirm()),
   },
   {
     name: 'channel',
@@ -150,24 +206,20 @@ const scenarios: Scenario[] = [
       await seedMarketState(stale, {
         receivedAt: new Date(Date.now() - 10 * 60_000),
       });
-      // Reuse the stale harness's market state inside this scenario's stack.
-      Object.assign(harness.market.marketState, {
-        getState: (): unknown => stale.market.marketState.getState() as unknown,
-      });
+      // Serve the stale state from this scenario's stack (same service, different clock/state).
+      jest
+        .spyOn(harness.market.marketState, 'getState')
+        .mockImplementation((definition) =>
+          stale.market.marketState.getState(definition),
+        );
     },
     update: () => callback(callbackDataForScreen('prices')),
   },
   {
     name: 'empty market state',
     prepare: (harness) => {
-      Object.assign(harness.market.marketState, {
-        getState: () => ({
-          symbols: [],
-          dayKey: null,
-          freshness: 'unknown',
-          updatedAt: null,
-        }),
-      });
+      // A symbol with no state at all: the screen must stay valid and never fabricate a price.
+      jest.spyOn(harness.market.marketState, 'getState').mockReturnValue(null);
     },
     update: () => callback(callbackDataForScreen('market')),
   },

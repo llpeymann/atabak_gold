@@ -1,5 +1,4 @@
 import {
-  formatAlertsPlaceholder,
   formatChangeIndicator,
   formatChannelScreen,
   formatEmptySection,
@@ -273,12 +272,6 @@ describe('static screens', () => {
 
     expect(text).toContain('منوی اصلی');
     expect(text).toContain('قیمت لحظهای');
-  });
-
-  it('renders the alert placeholder without promising a working feature', () => {
-    const text = formatAlertsPlaceholder();
-
-    expect(text).toContain('بهزودی فعال میشود');
   });
 
   it('renders the channel CTA with the configured handle', () => {

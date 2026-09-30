@@ -25,4 +25,9 @@ if (!process.env.USER_DATA_FILE) {
   process.env.ATABAK_E2E_DIR = directory;
   process.env.USER_DATA_FILE = join(directory, 'users.json');
   process.env.MARKET_STATE_FILE = join(directory, 'market-state.json');
+  process.env.ALERTS_DATA_FILE = join(directory, 'alerts.json');
 }
+
+// Phase 3: notify retries must be immediate in tests (the retry *count* is what is asserted).
+process.env.ALERT_NOTIFICATION_RETRY_DELAY_MS =
+  process.env.ALERT_NOTIFICATION_RETRY_DELAY_MS ?? '0';

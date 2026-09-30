@@ -1,3 +1,5 @@
+import { AlertService } from '../../alerts/alert.service';
+import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
 import { callbackDataForScreen } from './callback-data';
 import { MarketViewService } from './market-view.service';
@@ -74,12 +76,20 @@ describe('market flow (integration)', () => {
       },
     } as unknown as PriceService;
 
+    const alertStore = new AlertStore(config);
+    const alerts = new AlertService(
+      config,
+      alertStore,
+      market.marketState,
+      store,
+    );
     const botUx = new BotUxService(
       config,
       platform.registry,
       views,
       users,
       events,
+      alerts,
     );
 
     // `priceService` only exists to prove it is never used.

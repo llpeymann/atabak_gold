@@ -2,6 +2,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
 
+import { tehranDayKey } from '../common/tehran-time';
 import { createAppConfigService } from '../testing/test-doubles';
 import { MarketStateService } from './market-state.service';
 import { MarketStateStore } from './market-state.store';
@@ -257,18 +258,21 @@ describe('MarketStateService', () => {
     });
 
     it('persists state and restores it in a new instance (simulated restart)', async () => {
+      // The restore logic resets the daily window when the persisted day is not the current
+      // Tehran day, so this test must use *today* — otherwise it would only pass on one date.
+      const today = tehranDayKey(new Date());
       const first = createService(env);
       first.service.commit(
         gold,
         evaluationOf(17_000_000, '2026-09-30T08:00:00.000Z'),
-        DAY_ONE,
+        today,
       );
       first.service.commit(
         gold,
         evaluationOf(17_100_000, '2026-09-30T08:30:00.000Z'),
-        DAY_ONE,
+        today,
       );
-      await first.service.persist(DAY_ONE);
+      await first.service.persist(today);
 
       const second = createService(env);
       await second.service.restore();

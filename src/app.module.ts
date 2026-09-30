@@ -3,6 +3,10 @@ import { HttpModule } from '@nestjs/axios';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from '@nestjs/config';
 
+import { AlertEngineService } from './alerts/alert-engine.service';
+import { AlertNotificationService } from './alerts/alert-notification.service';
+import { AlertService } from './alerts/alert.service';
+import { AlertStore } from './alerts/alert.store';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { BaleService } from './bale/bale.service';
@@ -67,6 +71,11 @@ import { UserStore } from './users/user.store';
     UxEventLogService,
     BotUxService,
     UpdatePollerService,
+    // Phase 3 — price alerts (evaluation, persistence, delivery).
+    AlertStore,
+    AlertService,
+    AlertNotificationService,
+    AlertEngineService,
   ],
 })
 export class AppModule {}

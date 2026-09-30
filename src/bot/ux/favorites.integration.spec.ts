@@ -2,6 +2,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { AlertService } from '../../alerts/alert.service';
+import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
 import {
   callbackDataForFavorite,
@@ -96,12 +98,20 @@ describe('favorites flow (integration)', () => {
 
     const users = new UserService(config, store);
     const views = new MarketViewService(config, market.marketState, users);
+    const alertStore = new AlertStore(config);
+    const alerts = new AlertService(
+      config,
+      alertStore,
+      market.marketState,
+      store,
+    );
     const botUx = new BotUxService(
       config,
       platform.registry,
       views,
       users,
       new UxEventLogService(),
+      alerts,
     );
 
     return { botUx, store, users, platform, market, config };
@@ -218,6 +228,7 @@ describe('favorites flow (integration)', () => {
     expect(persisted.version).toBe(1);
     expect(persisted.users).toHaveLength(1);
     expect(Object.keys(persisted.users[0] ?? {}).sort()).toEqual([
+      'chatId',
       'createdAt',
       'id',
       'platform',

@@ -10,7 +10,9 @@ services:
     ports:
       - '3000:3000'
     volumes:
-      # Persistent market state (MARKET_STATE_FILE) across restarts/redeploys.
+      # Everything the bot must keep across restarts/redeploys lives here:
+      # MARKET_STATE_FILE (validated market state), USER_DATA_FILE (users + favourites)
+      # and ALERTS_DATA_FILE (price alerts + their delivery records).
       - atabak-market-state:/app/data
     healthcheck:
       test:

@@ -14,11 +14,41 @@ import {
   Keyboard,
   Platform,
 } from '../../platform/platform.types';
-import { CallbackAction, parseCallbackData, ScreenKey } from './callback-data';
+import {
+  AlertCallbackAction,
+  CallbackAction,
+  isAlertAction,
+  parseCallbackData,
+  ScreenKey,
+} from './callback-data';
+import { AlertTypeKey } from './alert-callback.types';
+import { AlertService } from '../../alerts/alert.service';
+import {
+  AlertDelivery,
+  AlertType,
+  isPercentAlert,
+} from '../../alerts/alert.types';
+import { tehranDateFa, tehranTimeFa } from '../../common/tehran-time';
+import {
+  ALERT_TEXTS,
+  formatAlertsHub,
+  formatAlertConfirmation,
+  formatAlertCreatedScreen,
+  formatAlertDetailScreen,
+  formatAlertLimitReached,
+  formatAlertWizardCancelled,
+  formatAlertsListScreen,
+  formatDeleteConfirmation,
+  formatEditPrompt,
+  formatInvalidTargetRetry,
+  formatSymbolPrompt,
+  formatTargetPrompt,
+  formatTypePrompt,
+} from '../../alerts/alert-format';
+import { parsePercentInput, parsePriceInput } from './number-input';
 import { MarketViewService } from './market-view.service';
 import { UxEventLogService } from './ux-event-log.service';
 import {
-  formatAlertsPlaceholder,
   formatChannelScreen,
   formatEmptySection,
   formatExpiredCallback,
@@ -31,6 +61,16 @@ import {
   formatWelcomeScreen,
 } from './ux-format';
 import {
+  alertCanceledKeyboard,
+  alertConfirmKeyboard,
+  alertCreatedKeyboard,
+  alertDeleteConfirmKeyboard,
+  alertDetailKeyboard,
+  alertSymbolKeyboard,
+  alertTargetInputKeyboard,
+  alertTypeKeyboard,
+  alertsKeyboard,
+  alertsListKeyboard,
   channelKeyboard,
   expiredCallbackKeyboard,
   favoritesKeyboard,
@@ -38,21 +78,51 @@ import {
   mainMenuKeyboard,
   menuKeyboard,
   pricesKeyboard,
-  screenFooter,
   sectionKeyboard,
 } from './ux-keyboards';
 
 /** Logical screens; `menu` and `favorites-manage` are navigation states, not callbacks (§39). */
-type UxScreen = ScreenKey | 'menu' | 'favorites-manage' | 'expired';
+type UxScreen =
+  | ScreenKey
+  | 'menu'
+  | 'favorites-manage'
+  | 'expired'
+  | 'alerts-list'
+  | 'alert-detail'
+  | 'alert-wizard'
+  | 'alert-created';
 
-/** Callback actions that simply open a screen (everything except favorite mutations). */
+/** Callback actions that simply open a screen (everything except mutations). */
 type NavigationAction = Extract<
   CallbackAction,
   { kind: 'menu' | 'home' | 'back' | 'noop' | 'screen' | 'manage-favorites' }
 >;
 
+/**
+ * Temporary "create/edit alert" wizard state (Phase 3 §24–§28, §69).
+ *
+ * In memory only and scoped per user: it never survives a restart (the spec explicitly allows
+ * that) and it can never leak between users. `startedAt` makes an abandoned wizard expire.
+ */
+interface AlertWizard {
+  step: 'symbol' | 'type' | 'target' | 'confirm' | 'edit-target';
+  symbol: string | null;
+  type: AlertType | null;
+  targetPrice: number | null;
+  targetPercent: number | null;
+  /** Set while editing an existing alert instead of creating one. */
+  editAlertId: string | null;
+  startedAt: number;
+}
+
 interface NavigationState {
   screen: UxScreen;
+  wizard?: AlertWizard;
+}
+
+interface RenderParams {
+  alertId?: string;
+  notice?: string;
 }
 
 interface RenderedScreen {
@@ -85,6 +155,7 @@ export class BotUxService {
     private readonly views: MarketViewService,
     private readonly users: UserService,
     private readonly events: UxEventLogService,
+    private readonly alerts: AlertService,
   ) {}
 
   /** Entry point used by the inbound poller (and by tests). Never throws for bad input. */
@@ -110,6 +181,7 @@ export class BotUxService {
       const user = await this.users.resolveUser(
         update.platform,
         update.platformUserId,
+        update.chatId,
       );
 
       if (update.kind === 'callback') {
@@ -133,6 +205,11 @@ export class BotUxService {
     user: User,
     message: InboundMessage,
   ): Promise<void> {
+    // A wizard waiting for a number consumes the next plain message (Phase 3 §27/§28).
+    if (await this.consumeWizardInput(adapter, user, message)) {
+      return;
+    }
+
     const command = asCommand(message);
 
     if (command === 'start') {
@@ -235,7 +312,18 @@ export class BotUxService {
       return;
     }
 
+    if (isAlertAction(action)) {
+      await this.handleAlertAction(adapter, user, callback, action);
+      return;
+    }
+
     const target = this.resolveTarget(action, user.id);
+
+    if (target !== 'alert-wizard') {
+      // Any explicit navigation away from the wizard ends it (no stale half-finished state).
+      this.clearWizard(user.id);
+    }
+
     const rendered = this.renderScreen(target, user.id);
     this.remember(user.id, rendered.screen);
 
@@ -382,7 +470,11 @@ export class BotUxService {
 
   // --- rendering --------------------------------------------------------------
 
-  private renderScreen(screen: UxScreen, userId: string): RenderedScreen {
+  private renderScreen(
+    screen: UxScreen,
+    userId: string,
+    params: RenderParams = {},
+  ): RenderedScreen {
     const now = new Date();
     const displayUnit = this.config.displayUnit;
 
@@ -467,10 +559,25 @@ export class BotUxService {
       case 'alerts':
         return {
           screen: 'alerts',
-          text: formatAlertsPlaceholder(),
-          // A placeholder has nothing to refresh: only back and home make sense here.
-          keyboard: screenFooter(),
+          text: formatAlertsHub(),
+          keyboard: alertsKeyboard(),
         };
+
+      case 'alerts-list':
+        return this.renderAlertsList(userId, params.notice);
+
+      case 'alert-detail':
+        return this.renderAlertDetail(
+          userId,
+          params.alertId ?? null,
+          params.notice,
+        );
+
+      case 'alert-wizard':
+        return this.renderAlertWizard(userId);
+
+      case 'alert-created':
+        return this.renderAlertCreated(userId, params.alertId ?? null);
 
       case 'channel':
         return {
@@ -513,6 +620,715 @@ export class BotUxService {
     }
   }
 
+  // --- Phase 3: alert flows ----------------------------------------------------
+
+  /** Routes every alert button. Ownership and state are always re-checked server-side (§68). */
+  private async handleAlertAction(
+    adapter: PlatformAdapter,
+    user: User,
+    callback: InboundCallback,
+    action: AlertCallbackAction,
+  ): Promise<void> {
+    switch (action.kind) {
+      case 'alert-new':
+        this.events.record('alert_create_started', {
+          platform: adapter.platform,
+          userId: user.id,
+        });
+        this.startWizard(user.id, 'symbol');
+        return this.render(
+          adapter,
+          callback,
+          this.renderScreen('alert-wizard', user.id),
+        );
+
+      case 'alert-symbol': {
+        const wizard = this.wizardMatching(user.id, 'symbol');
+
+        if (!wizard || !this.alerts.isSupportedSymbol(action.symbol)) {
+          return this.render(adapter, callback, this.expiredScreen());
+        }
+
+        wizard.symbol = action.symbol;
+        wizard.step = 'type';
+        return this.render(
+          adapter,
+          callback,
+          this.renderScreen('alert-wizard', user.id),
+        );
+      }
+
+      case 'alert-type': {
+        const wizard = this.wizardMatching(user.id, 'type');
+
+        if (!wizard) {
+          return this.render(adapter, callback, this.expiredScreen());
+        }
+
+        wizard.type = alertTypeFromKey(action.type);
+        wizard.step = 'target';
+        return this.render(
+          adapter,
+          callback,
+          this.renderScreen('alert-wizard', user.id),
+        );
+      }
+
+      case 'alert-confirm':
+        return this.confirmWizard(adapter, user, callback);
+
+      case 'alert-cancel':
+        this.clearWizard(user.id);
+        this.events.record('alert_create_cancelled', {
+          platform: adapter.platform,
+          userId: user.id,
+        });
+        return this.render(adapter, callback, {
+          screen: 'alert-wizard',
+          text: formatAlertWizardCancelled(),
+          keyboard: alertCanceledKeyboard(),
+        });
+
+      case 'alert-list': {
+        this.clearWizard(user.id);
+        this.events.record('alerts_view', {
+          platform: adapter.platform,
+          userId: user.id,
+        });
+        this.remember(user.id, 'alerts-list');
+        return this.render(
+          adapter,
+          callback,
+          this.renderScreen('alerts-list', user.id),
+        );
+      }
+
+      case 'alert-view': {
+        this.clearWizard(user.id);
+        this.events.record('alert_detail_view', {
+          platform: adapter.platform,
+          userId: user.id,
+        });
+        this.remember(user.id, 'alert-detail');
+        return this.render(adapter, callback, {
+          ...this.renderScreen('alert-detail', user.id, {
+            alertId: action.alertId,
+          }),
+        });
+      }
+
+      case 'alert-enable':
+      case 'alert-disable': {
+        const alert = this.alerts.findForUser(user.id, action.alertId);
+
+        if (!alert) {
+          return this.render(adapter, callback, this.notFoundScreen());
+        }
+
+        const result =
+          action.kind === 'alert-enable'
+            ? await this.alerts.enable(user.id, action.alertId)
+            : await this.alerts.disable(user.id, action.alertId);
+
+        if (!result.ok) {
+          return this.render(adapter, callback, {
+            screen: 'alert-detail',
+            text: this.alertFailureText(result.reason),
+            keyboard: alertDetailKeyboard(alert.status, alert.id),
+          });
+        }
+
+        const enabled = result.alert.status === 'ACTIVE';
+        this.events.record(enabled ? 'alert_enabled' : 'alert_disabled', {
+          platform: adapter.platform,
+          userId: user.id,
+          symbol: alert.symbol,
+        });
+
+        return this.render(adapter, callback, {
+          ...this.renderScreen('alert-detail', user.id, {
+            alertId: alert.id,
+            notice: enabled
+              ? '🔔 هشدار دوباره فعال شد.'
+              : '🔕 هشدار غیرفعال شد.',
+          }),
+        });
+      }
+
+      case 'alert-edit': {
+        const alert = this.alerts.findForUser(user.id, action.alertId);
+
+        if (!alert || alert.status === 'TRIGGERED') {
+          return this.render(adapter, callback, this.notFoundScreen());
+        }
+
+        this.startWizard(user.id, 'edit-target', {
+          symbol: alert.symbol,
+          type: alert.type,
+          editAlertId: alert.id,
+        });
+        return this.render(
+          adapter,
+          callback,
+          this.renderScreen('alert-wizard', user.id),
+        );
+      }
+
+      case 'alert-delete': {
+        const alert = this.alerts.findForUser(user.id, action.alertId);
+
+        if (!alert) {
+          return this.render(adapter, callback, this.notFoundScreen());
+        }
+
+        return this.render(adapter, callback, {
+          screen: 'alert-detail',
+          text: formatDeleteConfirmation(
+            alert,
+            this.alerts.definitionFor(alert.symbol),
+            this.config.displayUnit,
+          ),
+          keyboard: alertDeleteConfirmKeyboard(alert.id),
+        });
+      }
+
+      case 'alert-delete-confirm': {
+        const alert = this.alerts.findForUser(user.id, action.alertId);
+
+        if (!alert) {
+          return this.render(adapter, callback, this.notFoundScreen());
+        }
+
+        const removed = await this.alerts.remove(user.id, action.alertId);
+
+        if (!removed.ok) {
+          return this.render(adapter, callback, this.notFoundScreen());
+        }
+
+        this.events.record('alert_deleted', {
+          platform: adapter.platform,
+          userId: user.id,
+          symbol: alert.symbol,
+        });
+
+        return this.render(adapter, callback, {
+          ...this.renderScreen('alerts-list', user.id, {
+            notice: '🗑 هشدار حذف شد.',
+          }),
+        });
+      }
+
+      default:
+        return this.render(adapter, callback, this.expiredScreen());
+    }
+  }
+
+  /** Confirmation press: the only place an alert is created or an edit is persisted (§31, §38). */
+  private async confirmWizard(
+    adapter: PlatformAdapter,
+    user: User,
+    callback: InboundCallback,
+  ): Promise<void> {
+    const wizard = this.wizardMatching(user.id, 'confirm');
+
+    if (!wizard || wizard.symbol === null || wizard.type === null) {
+      return this.render(adapter, callback, this.expiredScreen());
+    }
+
+    if (wizard.editAlertId !== null) {
+      const result = await this.alerts.edit(user.id, wizard.editAlertId, {
+        targetPrice: wizard.targetPrice,
+        targetPercent: wizard.targetPercent,
+      });
+
+      if (!result.ok) {
+        this.events.record('alert_invalid_target', {
+          platform: adapter.platform,
+          userId: user.id,
+          symbol: wizard.symbol,
+        });
+        return this.render(adapter, callback, {
+          screen: 'alert-detail',
+          text: this.alertFailureText(result.reason),
+          keyboard: alertDetailKeyboard('ACTIVE', wizard.editAlertId),
+        });
+      }
+
+      this.events.record('alert_updated', {
+        platform: adapter.platform,
+        userId: user.id,
+        symbol: result.alert.symbol,
+      });
+      this.clearWizard(user.id);
+
+      return this.render(adapter, callback, {
+        ...this.renderScreen('alert-detail', user.id, {
+          alertId: result.alert.id,
+          notice: '✅ هشدار ویرایش شد.',
+        }),
+      });
+    }
+
+    const result = await this.alerts.create(user.id, {
+      type: wizard.type,
+      symbol: wizard.symbol,
+      targetPrice: wizard.targetPrice,
+      targetPercent: wizard.targetPercent,
+    });
+
+    if (!result.ok) {
+      if (result.reason === 'LIMIT_REACHED') {
+        const limit = result.limit ?? this.alerts.maxAlerts;
+        this.events.record('alert_limit_reached', {
+          platform: adapter.platform,
+          userId: user.id,
+        });
+        this.clearWizard(user.id);
+        return this.render(adapter, callback, {
+          screen: 'alerts-list',
+          text: formatAlertLimitReached(limit),
+          keyboard: alertsKeyboard(),
+        });
+      }
+
+      if (result.reason === 'DUPLICATE') {
+        this.events.record('alert_duplicate', {
+          platform: adapter.platform,
+          userId: user.id,
+          symbol: wizard.symbol,
+        });
+      } else {
+        this.events.record('alert_invalid_target', {
+          platform: adapter.platform,
+          userId: user.id,
+          symbol: wizard.symbol,
+        });
+      }
+
+      return this.render(adapter, callback, {
+        screen: 'alert-wizard',
+        text: this.alertFailureText(result.reason),
+        keyboard: alertCanceledKeyboard(),
+      });
+    }
+
+    this.events.record('alert_created', {
+      platform: adapter.platform,
+      userId: user.id,
+      symbol: result.alert.symbol,
+    });
+    this.clearWizard(user.id);
+
+    return this.render(
+      adapter,
+      callback,
+      this.renderScreen('alert-created', user.id, { alertId: result.alert.id }),
+    );
+  }
+
+  /**
+   * Consume the numeric answer of the wizard. Returns `true` when the message was handled here
+   * (so it is not interpreted as a command).
+   */
+  private async consumeWizardInput(
+    adapter: PlatformAdapter,
+    user: User,
+    message: InboundMessage,
+  ): Promise<boolean> {
+    const wizard = this.sessions.get(user.id)?.wizard;
+
+    if (
+      !wizard ||
+      (wizard.step !== 'target' && wizard.step !== 'edit-target')
+    ) {
+      return false;
+    }
+
+    if (message.text === null || message.text.trim().startsWith('/')) {
+      // A command is never a numeric answer.
+      return false;
+    }
+
+    const definition =
+      wizard.symbol === null ? null : this.alerts.definitionFor(wizard.symbol);
+
+    if (!definition || wizard.type === null) {
+      this.clearWizard(user.id);
+      await adapter.render({
+        chatId: message.chatId,
+        text: this.alertFailureText('UNKNOWN_SYMBOL'),
+        keyboard: alertCanceledKeyboard(),
+      });
+      return true;
+    }
+
+    const percentAlert = isPercentAlert(wizard.type);
+    const parsed = percentAlert
+      ? parsePercentInput(message.text)
+      : parsePriceInput(message.text);
+
+    const check = this.alerts.checkTarget({
+      type: wizard.type,
+      symbol: definition.symbol,
+      targetPrice: percentAlert ? null : parsed,
+      targetPercent: percentAlert ? parsed : null,
+    });
+
+    if (!check.ok) {
+      this.events.record('alert_invalid_target', {
+        platform: adapter.platform,
+        userId: user.id,
+        symbol: definition.symbol,
+      });
+
+      if (check.reason !== 'INVALID_TARGET') {
+        // Typing another number cannot fix this (no usable price / unsupported symbol):
+        // say so and close the wizard instead of looping the user.
+        this.clearWizard(user.id);
+        await adapter.render({
+          chatId: message.chatId,
+          text: this.alertFailureText(check.reason),
+          keyboard: alertCanceledKeyboard(),
+        });
+        return true;
+      }
+
+      // Keep the wizard open and ask again: a wrong number must not silently become a target.
+      await adapter.render({
+        chatId: message.chatId,
+        text: formatInvalidTargetRetry(
+          formatTargetPrompt(definition, wizard.type, this.config.displayUnit),
+        ),
+        keyboard: alertTargetInputKeyboard(),
+      });
+      return true;
+    }
+
+    wizard.targetPrice = percentAlert ? null : parsed;
+    wizard.targetPercent = percentAlert ? parsed : null;
+    wizard.step = 'confirm';
+
+    this.events.record('alert_wizard_input', {
+      platform: adapter.platform,
+      userId: user.id,
+      symbol: definition.symbol,
+    });
+
+    await adapter.render({
+      chatId: message.chatId,
+      text: this.confirmationText(wizard, definition),
+      keyboard: alertConfirmKeyboard(),
+    });
+    return true;
+  }
+
+  /** Confirmation text, including the "already met" warning of §14 and the §32 summary. */
+  private confirmationText(
+    wizard: AlertWizard,
+    definition: ReturnType<AlertService['definitionFor']>,
+  ): string {
+    if (definition === null || wizard.type === null) {
+      return ALERT_TEXTS.unknownSymbol;
+    }
+
+    const snapshot = this.alerts.priceSnapshot(definition.symbol);
+    const percentAlert = isPercentAlert(wizard.type);
+    // The baseline that will actually be stored: the current usable Phase 1 price.
+    const baseline = percentAlert
+      ? this.alerts.latestUsablePrice(definition.symbol)
+      : null;
+    const approximateTarget =
+      percentAlert && baseline !== null
+        ? approximatePercentTarget(baseline, wizard.targetPercent, wizard.type)
+        : null;
+
+    return formatAlertConfirmation({
+      definition,
+      type: wizard.type,
+      target: wizard.targetPrice,
+      percent: wizard.targetPercent,
+      direction:
+        wizard.type === 'PERCENT_DECREASE'
+          ? 'DOWN'
+          : wizard.type === 'PERCENT_INCREASE'
+            ? 'UP'
+            : null,
+      baseline,
+      approximateTarget,
+      currentPrice: snapshot?.price ?? null,
+      displayUnit: this.config.displayUnit,
+      alreadyMet: this.alerts.isConditionAlreadyMet({
+        type: wizard.type,
+        symbol: definition.symbol,
+        targetPrice: wizard.targetPrice,
+      }),
+    });
+  }
+
+  private async render(
+    adapter: PlatformAdapter,
+    callback: InboundCallback,
+    screen: RenderedScreen,
+  ): Promise<void> {
+    await adapter.render({
+      chatId: callback.chatId,
+      text: screen.text,
+      keyboard: screen.keyboard,
+      editMessageId: callback.messageId,
+    });
+  }
+
+  private alertFailureText(reason: string): string {
+    switch (reason) {
+      case 'LIMIT_REACHED':
+        return formatAlertLimitReached(this.alerts.maxAlerts);
+      case 'DUPLICATE':
+        return ALERT_TEXTS.duplicate;
+      case 'NO_VALID_PRICE':
+        return ALERT_TEXTS.noValidPrice;
+      case 'UNKNOWN_SYMBOL':
+        return ALERT_TEXTS.unknownSymbol;
+      case 'ALERT_NOT_FOUND':
+        return ALERT_TEXTS.notFound;
+      case 'INVALID_STATE':
+        return ALERT_TEXTS.invalidState;
+      default:
+        return ALERT_TEXTS.invalidTarget;
+    }
+  }
+
+  private notFoundScreen(): RenderedScreen {
+    return {
+      screen: 'alerts-list',
+      text: ALERT_TEXTS.notFound,
+      keyboard: alertsKeyboard(),
+    };
+  }
+
+  // --- alert screens ----------------------------------------------------------
+
+  private renderAlertsList(userId: string, notice?: string): RenderedScreen {
+    const alerts = this.alerts.listForUser(userId);
+    const definitions = new Map(
+      alerts.map((alert) => [
+        alert.symbol,
+        this.alerts.definitionFor(alert.symbol),
+      ]),
+    );
+    const resolved = new Map(
+      [...definitions.entries()]
+        .filter(
+          (entry): entry is [string, NonNullable<(typeof entry)[1]>] =>
+            entry[1] !== null,
+        )
+        .map(([symbol, definition]) => [symbol, definition]),
+    );
+    const displayUnit = this.config.displayUnit;
+    const base = formatAlertsListScreen(
+      alerts,
+      resolved,
+      displayUnit,
+      this.alerts.maxAlerts,
+    );
+
+    return {
+      screen: 'alerts-list',
+      text: notice ? `${notice}\n\n${base}` : base,
+      keyboard: alertsListKeyboard(
+        alerts.map((alert) => ({
+          id: alert.id,
+          label: resolved.get(alert.symbol)?.label ?? alert.symbol,
+          status: alert.status,
+        })),
+      ),
+    };
+  }
+
+  private renderAlertDetail(
+    userId: string,
+    alertId: string | null,
+    notice?: string,
+  ): RenderedScreen {
+    const alert =
+      alertId === null ? null : this.alerts.findForUser(userId, alertId);
+
+    if (!alert) {
+      return this.notFoundScreen();
+    }
+
+    const definition = this.alerts.definitionFor(alert.symbol);
+    const delivery = this.alerts.findDelivery(alert.id);
+
+    return {
+      screen: 'alert-detail',
+      text: formatAlertDetailScreen(
+        alert,
+        definition,
+        this.config.displayUnit,
+        {
+          createdTimeFa: tehranStamp(alert.createdAt),
+          triggeredTimeFa: alert.triggeredAt
+            ? tehranStamp(alert.triggeredAt)
+            : null,
+          deliveryNote: joinNotes(notice, deliveryNote(delivery)),
+        },
+      ),
+      keyboard: alertDetailKeyboard(alert.status, alert.id),
+    };
+  }
+
+  private renderAlertWizard(userId: string): RenderedScreen {
+    const wizard = this.activeWizard(userId);
+
+    if (!wizard) {
+      return this.expiredScreen();
+    }
+
+    const definition =
+      wizard.symbol === null ? null : this.alerts.definitionFor(wizard.symbol);
+
+    switch (wizard.step) {
+      case 'symbol':
+        return {
+          screen: 'alert-wizard',
+          text: formatSymbolPrompt(),
+          keyboard: alertSymbolKeyboard(
+            this.alerts
+              .listSymbolSnapshots()
+              .map((snapshot) => snapshot.definition),
+          ),
+        };
+      case 'edit-target': {
+        const alert =
+          wizard.editAlertId === null
+            ? null
+            : this.alerts.findForUser(userId, wizard.editAlertId);
+
+        if (!alert) {
+          return this.expiredScreen();
+        }
+
+        return {
+          screen: 'alert-wizard',
+          text: formatEditPrompt(alert, definition, this.config.displayUnit),
+          keyboard: alertTargetInputKeyboard(),
+        };
+      }
+      case 'type':
+        return {
+          screen: 'alert-wizard',
+          text: formatTypePrompt(definition),
+          keyboard: alertTypeKeyboard(),
+        };
+      case 'target':
+        return {
+          screen: 'alert-wizard',
+          text:
+            definition === null || wizard.type === null
+              ? ALERT_TEXTS.unknownSymbol
+              : formatTargetPrompt(
+                  definition,
+                  wizard.type,
+                  this.config.displayUnit,
+                ),
+          keyboard: alertTargetInputKeyboard(),
+        };
+      case 'confirm':
+      default: {
+        if (definition === null || wizard.type === null) {
+          return this.expiredScreen();
+        }
+
+        return {
+          screen: 'alert-wizard',
+          text: this.confirmationText(wizard, definition),
+          keyboard: alertConfirmKeyboard(),
+        };
+      }
+    }
+  }
+
+  private renderAlertCreated(
+    userId: string,
+    alertId: string | null,
+  ): RenderedScreen {
+    const alert =
+      alertId === null ? null : this.alerts.findForUser(userId, alertId);
+
+    if (!alert) {
+      return this.renderAlertsList(userId);
+    }
+
+    return {
+      screen: 'alert-created',
+      text: formatAlertCreatedScreen(
+        alert,
+        this.alerts.definitionFor(alert.symbol),
+        this.config.displayUnit,
+      ),
+      keyboard: alertCreatedKeyboard(),
+    };
+  }
+
+  // --- wizard state -----------------------------------------------------------
+
+  private startWizard(
+    userId: string,
+    step: AlertWizard['step'],
+    seed: Partial<AlertWizard> = {},
+  ): void {
+    this.sessions.set(userId, {
+      screen: 'alert-wizard',
+      wizard: {
+        step,
+        symbol: seed.symbol ?? null,
+        type: seed.type ?? null,
+        targetPrice: null,
+        targetPercent: null,
+        editAlertId: seed.editAlertId ?? null,
+        startedAt: Date.now(),
+      },
+    });
+  }
+
+  /** The wizard of this user, or `null` when there is none / it has expired (§69). */
+  private activeWizard(userId: string): AlertWizard | null {
+    const state = this.sessions.get(userId);
+    const wizard = state?.wizard;
+
+    if (!state || !wizard) {
+      return null;
+    }
+
+    if (Date.now() - wizard.startedAt > this.config.alertWizardTtlMs) {
+      this.clearWizard(userId);
+      this.logger.log(
+        `Dropped an expired alert wizard for user ${userId} (step ${wizard.step}).`,
+      );
+      return null;
+    }
+
+    return wizard;
+  }
+
+  /** The wizard only continues from the step the button belongs to. */
+  private wizardMatching(
+    userId: string,
+    step: AlertWizard['step'],
+  ): AlertWizard | null {
+    const wizard = this.activeWizard(userId);
+
+    return wizard && wizard.step === step ? wizard : null;
+  }
+
+  private clearWizard(userId: string): void {
+    const state = this.sessions.get(userId);
+
+    if (state?.wizard) {
+      this.sessions.set(userId, { screen: state.screen });
+    }
+  }
+
   // --- navigation state -------------------------------------------------------
 
   private remember(userId: string, screen: UxScreen): void {
@@ -528,6 +1344,12 @@ export class BotUxService {
     switch (screen) {
       case 'favorites-manage':
         return 'favorites';
+      case 'alerts-list':
+      case 'alert-created':
+        return 'alerts';
+      case 'alert-detail':
+      case 'alert-wizard':
+        return 'alerts-list';
       case 'menu':
         return 'menu';
       default:
@@ -544,6 +1366,77 @@ export class BotUxService {
   renderForTest(screen: UxScreen, userId: string): RenderedScreen {
     return this.renderScreen(screen, userId);
   }
+}
+
+/** Keyboard key → alert behaviour (the reverse mapping lives in `callback-data`). */
+function alertTypeFromKey(key: AlertTypeKey): AlertType {
+  switch (key) {
+    case 'above':
+      return 'PRICE_ABOVE';
+    case 'below':
+      return 'PRICE_BELOW';
+    case 'up':
+      return 'PERCENT_INCREASE';
+    default:
+      return 'PERCENT_DECREASE';
+  }
+}
+
+/** Presentation-only helper for the confirmation screen (§32): never the authoritative check. */
+function approximatePercentTarget(
+  baseline: number,
+  percent: number | null,
+  type: AlertType,
+): number | null {
+  if (percent === null || !Number.isFinite(baseline) || baseline <= 0) {
+    return null;
+  }
+
+  const factor = type === 'PERCENT_DECREASE' ? -1 : 1;
+
+  return baseline * (1 + (factor * percent) / 100);
+}
+
+/** Tehran date+time stamp used by the alert screens. */
+function tehranStamp(iso: string): string | null {
+  const date = new Date(iso);
+
+  return Number.isNaN(date.getTime())
+    ? null
+    : `${tehranDateFa(date)} — ${tehranTimeFa(date)}`;
+}
+
+/** User-facing delivery state of a triggered alert (never a technical error). */
+function deliveryNote(delivery: AlertDelivery | null): string | null {
+  if (!delivery) {
+    return null;
+  }
+
+  if (delivery.status === 'SENT') {
+    return '✅ پیام هشدار برای شما ارسال شد.';
+  }
+
+  if (delivery.status === 'PENDING') {
+    return '⏳ پیام هشدار در صف ارسال است.';
+  }
+
+  if (delivery.skippedReason === 'ALERT_DELETED') {
+    return 'ℹ️ پیام هشدار ارسال نشد (هشدار حذف شده بود).';
+  }
+
+  if (delivery.skippedReason === 'DELIVERY_OUTCOME_UNKNOWN') {
+    return 'ℹ️ وضعیت ارسال پیام هشدار نامشخص است.';
+  }
+
+  return '⚠️ ارسال پیام هشدار ناموفق بود.';
+}
+
+function joinNotes(...notes: (string | null | undefined)[]): string | null {
+  const parts = notes.filter(
+    (note): note is string => typeof note === 'string' && note !== '',
+  );
+
+  return parts.length === 0 ? null : parts.join('\n');
 }
 
 function truncateForLog(value: string): string {

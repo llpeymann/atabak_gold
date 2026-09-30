@@ -10,6 +10,12 @@ export interface User {
   id: string;
   platform: Platform;
   platformUserId: string;
+  /**
+   * Chat the user last interacted from (Phase 3): notifications must be delivered to a chat the
+   * bot has actually seen. `null` for records created before Phase 3 — the delivery layer then
+   * falls back to `platformUserId` (the private-chat identity).
+   */
+  chatId: string | null;
   createdAt: string;
   updatedAt: string;
 }

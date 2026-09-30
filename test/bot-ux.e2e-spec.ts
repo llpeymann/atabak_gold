@@ -180,8 +180,10 @@ describe('Bot UX (e2e)', () => {
     expect(lastText()).toContain('علاقهمندیهای من');
 
     await botUx.handleUpdate(callback('v1:back'));
+    // Phase 3 replaced the Phase 2 placeholder with the real alert section.
     await botUx.handleUpdate(callback('v1:screen:alerts'));
-    expect(lastText()).toContain('بهزودی فعال میشود');
+    expect(lastText()).toContain('🔔 <b>هشدار قیمت</b>');
+    expect(lastText()).toContain('هشدارهای من');
 
     await botUx.handleUpdate(callback('v1:back'));
     await botUx.handleUpdate(callback('v1:screen:channel'));

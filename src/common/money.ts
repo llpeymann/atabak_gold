@@ -34,8 +34,12 @@ export function fromRial(amountInRial: number, unit: MoneyUnit): number {
 const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const ARABIC_INDIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 
-/** Convert Persian/Arabic-Indic digits to ASCII digits. */
-function normalizeDigits(value: string): string {
+/**
+ * Convert Persian/Arabic-Indic digits to ASCII digits.
+ * Exported because every numeric input path (price API payloads *and* user text) must use the
+ * same conversion — a second implementation would silently drift.
+ */
+export function normalizeDigitsToAscii(value: string): string {
   return value.replace(/[۰-۹٠-٩]/g, (digit) => {
     const persianIndex = PERSIAN_DIGITS.indexOf(digit);
     const index =
@@ -56,7 +60,7 @@ export function parseAmount(raw: unknown): number | null {
 
   if (typeof raw === 'string') {
     // Remove Latin/Persian thousands separators and spaces before parsing.
-    const normalized = normalizeDigits(raw).replace(/[,،\u066c\s]/g, '');
+    const normalized = normalizeDigitsToAscii(raw).replace(/[,،\u066c\s]/g, '');
     if (normalized === '') {
       return null;
     }

@@ -321,12 +321,15 @@ describe('BotUxService', () => {
     });
   });
 
-  describe('alerts placeholder', () => {
-    it('explains that alerts arrive later and implements no engine', async () => {
+  describe('alerts entry point', () => {
+    // Phase 2 rendered a placeholder here; Phase 3 replaces it with the real alert hub.
+    it('opens the alert hub with create/list entries', async () => {
       await press(callbackDataForScreen('alerts'));
 
-      expect(harness.last().text).toContain('بهزودی فعال میشود');
+      expect(harness.last().text).toContain('هشدار قیمت');
       expect(harness.buttons().map((button) => button.text)).toEqual([
+        '➕ ساخت هشدار',
+        '🔔 هشدارهای من',
         '⬅️ بازگشت',
         '🏠 منوی اصلی',
       ]);

@@ -23,6 +23,38 @@ import {
   SymbolMarketState,
 } from './market.types';
 
+/**
+ * One accepted price that was committed into the market state.
+ *
+ * This is the *only* thing an interested subsystem (Phase 3 alerts) may consume from the market
+ * engine: an accepted, already-validated price together with the comparison baseline Phase 1
+ * used. Rejected/anomalous values never produce an event (§50).
+ */
+export interface MarketPriceCommittedEvent {
+  symbol: string;
+  label: string;
+  section: SymbolDefinition['section'];
+  unit: SymbolDefinition['unit'];
+  /** Accepted current price in the canonical unit. */
+  price: number;
+  /** The observation immediately preceding it (same day, or the previous day's last price). */
+  previousPrice: number | null;
+  baseline: PriceEvaluation['baseline'];
+  dayKey: string;
+  evaluatedAt: string;
+}
+
+/**
+ * Listener contract: subsystems register themselves instead of the market engine depending on
+ * them, so the Phase 1 pipeline stays free of downstream concerns and the publication path is
+ * unaffected by listener failures.
+ */
+export interface MarketUpdateListener {
+  onMarketPricesCommitted(
+    events: readonly MarketPriceCommittedEvent[],
+  ): Promise<void> | void;
+}
+
 export interface MarketCycleResult {
   /** The only object a publisher may use. `publishable: false` means: publish nothing. */
   update: PublishableMarketUpdate;
@@ -43,6 +75,9 @@ export interface MarketCycleResult {
 export class MarketEngineService {
   private readonly logger = new Logger(MarketEngineService.name);
 
+  /** Registered downstream consumers (Phase 3: the alert engine). */
+  private readonly listeners: MarketUpdateListener[] = [];
+
   constructor(
     private readonly config: AppConfigService,
     private readonly parser: RawPayloadParser,
@@ -51,6 +86,13 @@ export class MarketEngineService {
     private readonly marketState: MarketStateService,
     private readonly anomalyAlerts: AnomalyAlertService,
   ) {}
+
+  /** Add a listener; it is notified once per cycle with the prices committed in that cycle. */
+  registerUpdateListener(listener: MarketUpdateListener): void {
+    if (!this.listeners.includes(listener)) {
+      this.listeners.push(listener);
+    }
+  }
 
   async evaluateCycle(
     rawPayload: unknown,
@@ -187,6 +229,9 @@ export class MarketEngineService {
       await this.anomalyAlerts.reportAnomaly(anomaly, receivedAt);
     }
 
+    // Downstream consumers (Phase 3 alerts) only ever see accepted, committed prices.
+    await this.notifyListeners(accepted, definitions, dayKey);
+
     const evaluated = this.buildPublishablePrices(accepted, registry);
     const requiredFresh = this.countFreshRequired(accepted, registry);
     const publishable = requiredFresh > 0 && evaluated.length > 0;
@@ -226,6 +271,53 @@ export class MarketEngineService {
       },
       staleSymbols,
     };
+  }
+
+  /**
+   * Notify every listener exactly once per cycle with the accepted prices of that cycle.
+   * A listener failure is logged and never propagates: price publication must not depend on
+   * an optional downstream subsystem.
+   */
+  private async notifyListeners(
+    accepted: readonly PriceEvaluation[],
+    definitions: ReadonlyMap<string, SymbolDefinition>,
+    dayKey: string,
+  ): Promise<void> {
+    if (this.listeners.length === 0 || accepted.length === 0) {
+      return;
+    }
+
+    const events: MarketPriceCommittedEvent[] = [];
+
+    for (const evaluation of accepted) {
+      const definition = definitions.get(evaluation.symbol);
+
+      if (!definition || evaluation.price === undefined) {
+        continue;
+      }
+
+      events.push({
+        symbol: evaluation.symbol,
+        label: definition.label,
+        section: definition.section,
+        unit: definition.unit,
+        price: evaluation.price,
+        previousPrice: evaluation.previousPrice,
+        baseline: evaluation.baseline,
+        dayKey,
+        evaluatedAt: evaluation.evaluatedAt,
+      });
+    }
+
+    for (const listener of this.listeners) {
+      try {
+        await listener.onMarketPricesCommitted(events);
+      } catch (error) {
+        this.logger.error(
+          `Market update listener failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   /** Publishable prices in registry order, grouped by section order. */
