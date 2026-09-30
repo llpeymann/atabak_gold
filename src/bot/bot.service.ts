@@ -1,376 +1,186 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { ConfigService } from '@nestjs/config';
 
-import { PriceService } from '../price/price.service';
 import { BaleService } from '../bale/bale.service';
+import { DeliveryResult, summarizeDelivery } from '../bale/delivery-result';
+import { describeError } from '../common/log-safety';
+import {
+  tehranDateFa,
+  tehranDayKey,
+  tehranTimeFa,
+  TEHRAN_TIME_ZONE,
+} from '../common/tehran-time';
 import { PosterService } from '../poster/poster.service';
+import { PriceService } from '../price/price.service';
+import { PriceMessageBuilder } from './price-message.builder';
+import { TrendTracker } from './trend-tracker';
 
+/**
+ * Scheduling and publication orchestration.
+ *
+ * Phase 0 behaviour:
+ *  - every job publishes through `runPublication()`, which refuses to start a second
+ *    publication while one is still running (no duplicated message from overlapping runs),
+ *  - the price jobs and the poster job no longer share a minute (see the cron table below),
+ *  - a failed price API call publishes nothing and logs an error — never a fake success,
+ *  - the trend baseline is only advanced after a message was actually delivered somewhere.
+ */
 @Injectable()
-export class BotService {
-  private static readonly TIME_ZONE = 'Asia/Tehran';
-
+export class BotService implements OnModuleInit {
   private readonly logger = new Logger(BotService.name);
-  private readonly lastPrices: Map<string, number> = new Map();
-  private readonly CHANNEL_ID: string;
+
+  /** Name of the publication currently in flight, or `null`. */
+  private publishing: string | null = null;
 
   constructor(
     private readonly priceService: PriceService,
     private readonly baleService: BaleService,
-    private readonly configService: ConfigService,
     private readonly posterService: PosterService,
-  ) {
-    this.CHANNEL_ID =
-      this.configService.get<string>('BALE_CHANNEL_ID') || '';
+    private readonly priceMessageBuilder: PriceMessageBuilder,
+    private readonly trends: TrendTracker,
+  ) {}
 
-    if (!this.CHANNEL_ID) {
-      this.logger.error('BALE_CHANNEL_ID is not configured.');
-    }
+  onModuleInit(): void {
+    this.logger.log(
+      `Scheduled jobs (${TEHRAN_TIME_ZONE}): price update — every 30 min 08:00→21:30; ` +
+        'daily closing price — 22:00; poster report — 12:15, 16:15, 19:15 ' +
+        `(delivery targets: ${this.baleService.platforms.join(', ') || 'none'})`,
+    );
   }
 
-  /**
-   * ارسال گزارش قیمت در ساعت‌های ۱۲، ۱۶ و ۱۹ به وقت ایران
-   */
-  @Cron('0 0 12,16,19 * * *', {
-    timeZone: BotService.TIME_ZONE,
-  })
-  async sendPricePoster(): Promise<void> {
-    if (!this.CHANNEL_ID) {
-      this.logger.warn(
-        'CHANNEL_ID is not configured, skipping poster cron job.',
-      );
-      return;
-    }
-
-    try {
-      this.logger.log('Generating and sending price poster text...');
-
-      const data = await this.priceService.getPrices();
-
-      if (!data) {
-        throw new Error('API returned no data for poster');
-      }
-
-      const posterText =
-        await this.posterService.generatePricePoster(data);
-
-      const footer =
-        `\n\n━━━━━━━━━━━━━━━━\n` +
-        `📎 خرید و فروش طلا و ارز با نرخ روز\n` +
-        `👔 ثبت سفارش: @atabak_admin\n` +
-        `📱 شماره تماس: 09123510031\n` +
-        `━━━━━━━━━━━━━━━━\n` +
-        `🆔 @tala_atabak`;
-
-      await this.baleService.sendMessage(
-        this.CHANNEL_ID,
-        `${posterText}${footer}`,
-        'HTML',
-      );
-
-      this.logger.log('Price poster text sent successfully.');
-    } catch (error: any) {
-      this.logger.error(
-        `Failed to send price poster: ${error?.message}`,
-        error?.stack,
-      );
-    }
-  }
-
-  /**
-   * ارسال پیام قیمت از ساعت ۰۸:۰۰ تا ۲۱:۳۰،
-   * هر نیم ساعت به وقت ایران
-   */
+  /** Price update every 30 minutes between 08:00 and 21:30 (Asia/Tehran). */
   @Cron('0 0,30 8-21 * * *', {
-    timeZone: BotService.TIME_ZONE,
+    name: 'price-update-half-hourly',
+    timeZone: TEHRAN_TIME_ZONE,
   })
+  async handleHalfHourlyPriceUpdate(): Promise<void> {
+    await this.runPriceUpdate('Price update (half-hourly)');
+  }
+
+  /** Last price message of the day at 22:00 (Asia/Tehran). */
+  @Cron('0 0 22 * * *', {
+    name: 'price-update-daily-closing',
+    timeZone: TEHRAN_TIME_ZONE,
+  })
+  async handleDailyClosingPriceUpdate(): Promise<void> {
+    await this.runPriceUpdate('Price update (daily closing)');
+  }
 
   /**
-   * آخرین پیام روز در ساعت ۲۲:۰۰ به وقت ایران
+   * Poster report three times a day at 12:15, 16:15 and 19:15.
+   *
+   * The report used to run at 12:00/16:00/19:00, i.e. in the exact same minute as the
+   * half-hourly price update, which published two messages to the channel simultaneously.
+   * The times were moved by 15 minutes — the business function itself is unchanged.
    */
-  @Cron('0 0 22 * * *', {
-    timeZone: BotService.TIME_ZONE,
+  @Cron('15 12,16,19 * * *', {
+    name: 'poster-report',
+    timeZone: TEHRAN_TIME_ZONE,
   })
-  async handleCron(): Promise<void> {
-    if (!this.CHANNEL_ID) {
-      this.logger.warn(
-        'CHANNEL_ID is not configured, skipping price cron job.',
-      );
-      return;
-    }
+  async handlePosterReport(): Promise<void> {
+    await this.runPosterReport('Poster report');
+  }
 
-    try {
-      this.logger.log('⏳ Starting price update process...');
-
-      const data = await this.priceService.getPrices();
-
-      if (!data) {
-        throw new Error('API returned no data');
-      }
+  private async runPriceUpdate(job: string): Promise<void> {
+    await this.runPublication(job, async () => {
+      const marketData = await this.priceService.getMarketData();
 
       const now = new Date();
+      const dayKey = tehranDayKey(now);
 
-      const currentTimeFa = now.toLocaleTimeString('fa-IR', {
-        timeZone: BotService.TIME_ZONE,
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
+      if (this.trends.resetForNewDay(dayKey)) {
+        this.logger.log(
+          `New Tehran trading day (${dayKey}): trend baseline reset — the first message ` +
+            'of the day is not compared with yesterday.',
+        );
+      }
+
+      const message = this.priceMessageBuilder.build(marketData, {
+        dayKey,
+        dateFa: tehranDateFa(now),
+        timeFa: tehranTimeFa(now),
       });
 
-      const currentDateFa = now.toLocaleDateString('fa-IR', {
-        timeZone: BotService.TIME_ZONE,
-      });
+      const results = await this.baleService.sendMessage(message.text);
 
-      const message = this.formatMessage(
-        data,
-        currentDateFa,
-        currentTimeFa,
-      );
+      // Only advance the trend baseline when the message actually reached a channel.
+      if (summarizeDelivery(results).anySucceeded) {
+        this.trends.commit(message.snapshot, dayKey);
+      } else {
+        this.logger.error(
+          `${job}: nothing was delivered, trend baseline left unchanged.`,
+        );
+      }
 
-      this.logger.log(
-        `📩 Sending price message to Bale channel at ${currentTimeFa}...`,
-      );
+      return results;
+    });
+  }
 
-      await this.baleService.sendMessage(
-        this.CHANNEL_ID,
-        message,
-        'HTML',
-      );
+  private async runPosterReport(job: string): Promise<void> {
+    await this.runPublication(job, async () => {
+      const marketData = await this.priceService.getMarketData();
+      const posterText = this.posterService.generatePricePoster(marketData);
 
-      this.logger.log('✅ Market update sent successfully.');
-    } catch (error: any) {
-      this.logger.error(
-        `❌ Failed to send market update: ${error?.message}`,
-        error?.stack,
+      return this.baleService.sendMessage(posterText);
+    });
+  }
+
+  /**
+   * Single publication gate: guarantees a job is not started twice concurrently and that
+   * delivery results are always reported truthfully.
+   */
+  private async runPublication(
+    job: string,
+    publish: () => Promise<DeliveryResult[]>,
+  ): Promise<void> {
+    if (this.publishing !== null) {
+      this.logger.warn(
+        `Skipping "${job}": "${this.publishing}" is still in progress — ` +
+          'no duplicate publication.',
       );
+      return;
+    }
+
+    this.publishing = job;
+
+    try {
+      const results = await publish();
+      this.reportDelivery(job, results);
+    } catch (error) {
+      // Covers a failed price API call or any unexpected failure: no publication,
+      // no success log.
+      this.logger.error(`❌ ${job} failed: ${describeError(error)}`);
+    } finally {
+      this.publishing = null;
     }
   }
 
-  private escapeHtml(value: any): string {
-    return String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
+  private reportDelivery(
+    job: string,
+    results: readonly DeliveryResult[],
+  ): void {
+    const summary = summarizeDelivery(results);
 
-  private formatMessage(
-    data: any,
-    currentDate: string,
-    currentTime: string,
-  ): string {
-    const gold = data?.gold || [];
-    const currency = data?.currency || [];
-
-    const formatPrice = (value: any): string => {
-      const number = Number(value);
-
-      return Number.isNaN(number)
-        ? '---'
-        : number.toLocaleString('fa-IR');
-    };
-
-    const getTrendEmoji = (
-      symbol: string,
-      currentPrice: number,
-    ): string => {
-      const lastPrice = this.lastPrices.get(symbol);
-
-      this.lastPrices.set(symbol, currentPrice);
-
-      if (lastPrice === undefined) {
-        return '◽';
-      }
-
-      if (currentPrice > lastPrice) {
-        return '🔺';
-      }
-
-      if (currentPrice < lastPrice) {
-        return '🔻';
-      }
-
-      return '🔹';
-    };
-
-    const formatLine = (
-      item: any,
-      label?: string,
-    ): string | null => {
-      if (!item || item.price === undefined || item.price === null) {
-        return null;
-      }
-
-      const currentPrice = Number(item.price);
-
-      const trendEmoji = getTrendEmoji(
-        item.symbol,
-        currentPrice,
+    if (summary.allFailed) {
+      const details = results
+        .map(
+          (result) => `${result.platform}: ${result.error ?? 'unknown error'}`,
+        )
+        .join(' | ');
+      this.logger.error(
+        `❌ ${job}: delivery FAILED on every platform — ${details}`,
       );
+      return;
+    }
 
-      const name = this.escapeHtml(
-        label || item.name || item.symbol,
+    if (summary.failed.length > 0) {
+      this.logger.warn(
+        `⚠️ ${job}: delivered to ${summary.succeeded.join(', ')}, ` +
+          `FAILED on ${summary.failed.join(', ')}`,
       );
+      return;
+    }
 
-      const price = this.escapeHtml(
-        formatPrice(item.price),
-      );
-
-      const unit = this.escapeHtml(item.unit || '');
-
-      const changePercent =
-        item.change_percent !== undefined &&
-        item.change_percent !== null
-          ? ` (${this.escapeHtml(item.change_percent)}%)`
-          : '';
-
-      return (
-        `${name}: <b>${price}</b> ${unit} ` +
-        `${trendEmoji}${changePercent}`
-      );
-    };
-
-    const lines: string[] = [
-      '📌 <b>گزارش لحظه‌ای بازار</b>',
-      `🕒 ${this.escapeHtml(currentDate)} | ${this.escapeHtml(currentTime)}`,
-      '━━━━━━━━━━━━━━━━',
-      '🟨 <b>طلا</b>',
-    ];
-
-    const goldItems = [
-      {
-        symbol: 'XAUUSD',
-        label: 'اونس جهانی',
-      },
-      {
-        symbol: 'IR_GOLD_18K',
-        label: 'طلای ۱۸ عیار',
-      },
-      {
-        symbol: 'IR_GOLD_24K',
-        label: 'طلای ۲۴ عیار',
-      },
-      {
-        symbol: 'IR_GOLD_MELTED',
-        label: 'آبشده نقدی',
-      },
-    ];
-
-    goldItems.forEach((goldItem) => {
-      const item = gold.find(
-        (goldData: any) =>
-          goldData.symbol === goldItem.symbol,
-      );
-
-      const line = formatLine(
-        item,
-        goldItem.label,
-      );
-
-      if (line) {
-        lines.push(line);
-      }
-    });
-
-    lines.push('', '🪙 <b>سکه</b>');
-
-    const coinItems = [
-      {
-        symbol: 'IR_COIN_EMAMI',
-        label: 'سکه امامی',
-      },
-      {
-        symbol: 'IR_COIN_BAHAR',
-        label: 'سکه تمام بهار',
-      },
-      {
-        symbol: 'IR_COIN_HALF',
-        label: 'نیم سکه',
-      },
-      {
-        symbol: 'IR_COIN_QUARTER',
-        label: 'ربع سکه',
-      },
-      {
-        symbol: 'IR_COIN_1G',
-        label: 'سکه گرمی',
-      },
-    ];
-
-    coinItems.forEach((coinItem) => {
-      const item = gold.find(
-        (goldData: any) =>
-          goldData.symbol === coinItem.symbol,
-      );
-
-      const line = formatLine(
-        item,
-        coinItem.label,
-      );
-
-      if (line) {
-        lines.push(line);
-      }
-    });
-
-    lines.push('', '💰 <b>ارز (تومان)</b>');
-
-    const currencyItems = [
-      {
-        symbol: 'USDT_IRT',
-        label: 'تتر (فی)',
-      },
-      {
-        symbol: 'USD',
-        label: '🇺🇸 دلار آمریکا',
-      },
-      {
-        symbol: 'EUR',
-        label: '🇪🇺 یورو',
-      },
-      {
-        symbol: 'GBP',
-        label: '🇬🇧 پوند',
-      },
-      {
-        symbol: 'TRY',
-        label: '🇹🇷 لیر ترکیه',
-      },
-      {
-        symbol: 'AED',
-        label: '🇦🇪 درهم امارات',
-      },
-      {
-        symbol: 'CNY',
-        label: '🇨🇳 یوآن چین',
-      },
-    ];
-
-    currencyItems.forEach((currencyItem) => {
-      const item = currency.find(
-        (currencyData: any) =>
-          currencyData.symbol === currencyItem.symbol,
-      );
-
-      const line = formatLine(
-        item,
-        currencyItem.label,
-      );
-
-      if (line) {
-        lines.push(line);
-      }
-    });
-
-    lines.push(
-      '',
-      '━━━━━━━━━━━━━━━━',
-      '📎 خرید و فروش طلا و ارز با نرخ روز',
-      '👔 ثبت سفارش: @atabak_admin',
-      '📱 شماره تماس: 09123510031',
-      '━━━━━━━━━━━━━━━━',
-      '🆔 @tala_atabak',
-    );
-
-    return lines.join('\n');
+    this.logger.log(`✅ ${job}: delivered to ${summary.succeeded.join(', ')}.`);
   }
 }

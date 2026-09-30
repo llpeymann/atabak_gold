@@ -1,137 +1,159 @@
-import {
-  Injectable,
-  Logger,
-  InternalServerErrorException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
+import axios from 'axios';
 import { firstValueFrom } from 'rxjs';
-import { ConfigService } from '@nestjs/config';
-import FormData from 'form-data';
-import { Readable } from 'stream';
 
+import { AppConfigService } from '../config/app-config.service';
+import { normalizeHtmlForDelivery } from '../common/html';
+import { describeError, redactSecrets, truncate } from '../common/log-safety';
+import { DeliveryPlatform, DeliveryResult } from './delivery-result';
+
+interface DeliveryTarget {
+  platform: DeliveryPlatform;
+  apiBaseUrl: string;
+  channelId: string;
+}
+
+/**
+ * Message delivery to the configured channels.
+ *
+ * Phase 0 guarantees implemented here:
+ *  - a request timeout on every delivery call (no indefinitely hanging cron),
+ *  - failures are *returned* as structured results instead of being swallowed: the caller
+ *    receives `success: false` plus a sanitized error for the affected platform,
+ *  - bot tokens never reach the logs (`redactSecrets`).
+ */
 @Injectable()
 export class BaleService {
   private readonly logger = new Logger(BaleService.name);
-  private readonly PHOTO_TIMEOUT = 40000;
+  private readonly targets: DeliveryTarget[];
 
   constructor(
     private readonly httpService: HttpService,
-    private readonly configService: ConfigService,
-  ) {}
+    private readonly config: AppConfigService,
+  ) {
+    const bale = this.config.bale;
+    const targets: DeliveryTarget[] = [
+      {
+        platform: 'bale',
+        apiBaseUrl: `https://tapi.bale.ai/bot${bale.botToken}`,
+        channelId: bale.channelId,
+      },
+    ];
 
-  private getUrls() {
-    const baleToken = this.configService.get<string>('BALE_BOT_TOKEN');
-    const tgToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
+    const telegram = this.config.telegram;
+    if (telegram) {
+      targets.push({
+        platform: 'telegram',
+        apiBaseUrl: `https://api.telegram.org/bot${telegram.botToken}`,
+        channelId: telegram.channelId,
+      });
+    } else {
+      this.logger.log('Telegram delivery is not configured — Bale only.');
+    }
 
+    this.targets = targets;
+  }
+
+  get platforms(): DeliveryPlatform[] {
+    return this.targets.map((target) => target.platform);
+  }
+
+  /**
+   * Publish the same text to every enabled platform.
+   * Never rejects: a failing platform yields a result with `success: false`.
+   */
+  async sendMessage(text: string): Promise<DeliveryResult[]> {
+    const payloadText = normalizeHtmlForDelivery(text);
+
+    const settled = await Promise.allSettled(
+      this.targets.map((target) => this.deliver(target, payloadText)),
+    );
+
+    return settled.map((entry, index) => {
+      if (entry.status === 'fulfilled') {
+        return entry.value;
+      }
+
+      // Defensive: `deliver` never rejects, but an unexpected rejection must still be
+      // reported as a failure instead of being lost.
+      const target = this.targets[index];
+      return this.failureResult(target, describeError(entry.reason));
+    });
+  }
+
+  private async deliver(
+    target: DeliveryTarget,
+    text: string,
+  ): Promise<DeliveryResult> {
+    const startedAt = Date.now();
+
+    try {
+      await firstValueFrom(
+        this.httpService.post(
+          `${target.apiBaseUrl}/sendMessage`,
+          {
+            chat_id: target.channelId,
+            text,
+            parse_mode: 'HTML',
+          },
+          { timeout: this.config.deliveryTimeoutMs },
+        ),
+      );
+
+      const durationMs = Date.now() - startedAt;
+      this.logger.log(
+        `✅ Message delivered to ${target.platform} (channel ${target.channelId}) in ${durationMs}ms`,
+      );
+
+      return {
+        platform: target.platform,
+        channel: target.channelId,
+        messageType: 'text',
+        timestamp: new Date().toISOString(),
+        durationMs,
+        success: true,
+      };
+    } catch (error) {
+      const description = this.describeDeliveryError(error);
+      this.logger.error(
+        `❌ Message delivery failed on ${target.platform} (channel ${target.channelId}): ${description}`,
+      );
+
+      return this.failureResult(target, description, startedAt);
+    }
+  }
+
+  private failureResult(
+    target: DeliveryTarget,
+    error: string,
+    startedAt = Date.now(),
+  ): DeliveryResult {
     return {
-      bale: `https://tapi.bale.ai/bot${baleToken}`,
-      telegram: `https://api.telegram.org/bot${tgToken}`
+      platform: target.platform,
+      channel: target.channelId,
+      messageType: 'text',
+      timestamp: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
+      success: false,
+      error: redactSecrets(error, this.secrets()),
     };
   }
 
-  // اضافه کردن پارامتر اختیاری parseMode با مقدار پیش‌فرض 'HTML'
-  async sendMessage(chatId: string, text: string, parseMode: string = 'HTML'): Promise<any> {
-    const urls = this.getUrls();
-    const tgChatId = this.configService.get<string>('TELEGRAM_CHANNEL_ID');
+  private describeDeliveryError(error: unknown): string {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
 
-    // تبدیل تگ‌های <b> به <strong> برای سازگاری کامل با بله
-    const processedText = parseMode === 'HTML' ? this.replaceBoldTags(text) : text;
-
-    const promises: Promise<any>[] = [];
-
-    // ارسال به بله
-    if (this.configService.get('BALE_BOT_TOKEN')) {
-        promises.push(
-          firstValueFrom(this.httpService.post(`${urls.bale}/sendMessage`, {
-            chat_id: chatId,
-            text: processedText,
-            parse_mode: parseMode,
-          })).then(() => this.logger.log(`✅ Sent to Bale: ${chatId}`))
-             .catch((err) => this.logger.error(`❌ Bale Error: ${err.message}`))
-        );
+      if (status !== undefined) {
+        const body = truncate(JSON.stringify(error.response?.data ?? ''));
+        return `HTTP ${status}${body ? ` — ${body}` : ''}`;
+      }
     }
 
-    // ارسال به تلگرام
-    if (this.configService.get('TELEGRAM_BOT_TOKEN') && tgChatId) {
-      promises.push(
-        firstValueFrom(this.httpService.post(`${urls.telegram}/sendMessage`, {
-          chat_id: tgChatId,
-          text: processedText,
-          parse_mode: parseMode,
-        })).then(() => this.logger.log(`✅ Sent to Telegram: ${tgChatId}`))
-           .catch((err) => this.logger.error(`❌ Telegram Error: ${err.message}`))
-      );
-    }
-
-    return Promise.allSettled(promises);
+    return describeError(error);
   }
 
-  // اضافه کردن پارامتر اختیاری parseMode به ارسال عکس با مقدار پیش‌فرض 'HTML'
-  async sendPhotoBuffer(
-    chatId: string,
-    buffer: Buffer,
-    caption: string,
-    parseMode: string = 'HTML'
-  ): Promise<any> {
-    const urls = this.getUrls();
-    const tgChatId = this.configService.get<string>('TELEGRAM_CHANNEL_ID');
-    
-    const results: Promise<any>[] = [];
-
-    // ارسال به بله
-    if (this.configService.get('BALE_BOT_TOKEN')) {
-        results.push(this.executeSendPhoto(urls.bale, chatId, buffer, caption, 'Bale', parseMode));
-    }
-
-    // ارسال به تلگرام
-    if (this.configService.get('TELEGRAM_BOT_TOKEN') && tgChatId) {
-        results.push(this.executeSendPhoto(urls.telegram, tgChatId, buffer, caption, 'Telegram', parseMode));
-    }
-
-    return Promise.allSettled(results);
-  }
-
-  private async executeSendPhoto(
-    baseUrl: string, 
-    targetId: string, 
-    buffer: Buffer, 
-    caption: string, 
-    platformName: string,
-    parseMode: string = 'HTML'
-  ): Promise<void> {
-    try {
-      const stream = new Readable();
-      stream.push(buffer);
-      stream.push(null);
-
-      // تبدیل تگ‌های <b> به <strong> برای سازگاری کامل با بله
-      const processedCaption = parseMode === 'HTML' ? this.replaceBoldTags(caption) : caption;
-
-      const formData = new FormData();
-      formData.append('chat_id', targetId);
-      formData.append('photo', stream, {
-        filename: 'chart.png',
-        contentType: 'image/png',
-        knownLength: buffer.length
-      });
-      formData.append('caption', processedCaption);
-      formData.append('parse_mode', parseMode);
-
-      await firstValueFrom(
-        this.httpService.post(`${baseUrl}/sendPhoto`, formData, {
-          timeout: this.PHOTO_TIMEOUT,
-          headers: { ...formData.getHeaders() },
-        }),
-      );
-      this.logger.log(`✅ Photo sent successfully to ${platformName}`);
-    } catch (error: any) {
-      this.logger.error(`❌ Failed to send photo to ${platformName}: ${error?.message}`);
-    }
-  }
-
-  // متد کمکی برای تبدیل تگ‌های Bold به strong سازگار با بله
-  private replaceBoldTags(text: string): string {
-    if (!text) return '';
-    return text.replace(/<b>/g, '<strong>').replace(/<\/b>/g, '</strong>');
+  private secrets(): (string | undefined)[] {
+    return [this.config.bale.botToken, this.config.telegram?.botToken];
   }
 }

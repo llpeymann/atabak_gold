@@ -1,27 +1,50 @@
 import { Injectable } from '@nestjs/common';
 
+import { AppConfigService } from '../config/app-config.service';
+import { buildBrandFooterLines } from '../common/branding';
+import { escapeHtml } from '../common/html';
+import { formatMoney } from '../common/money';
+import { tehranDateFa } from '../common/tehran-time';
+import { MarketData } from '../price/price.interface';
+
+/**
+ * Text poster (short market summary) published three times a day.
+ *
+ * Phase 0 changes: synchronous (it never awaited anything), prices go through the shared
+ * money formatter (explicit unit instead of a hard-coded «ریال»), and the footer is the
+ * shared brand footer instead of a second, divergent branding string.
+ */
 @Injectable()
 export class PosterService {
-  async generatePricePoster(data: any): Promise<string> {
-    const dateFa = new Date().toLocaleDateString('fa-IR', { timeZone: 'Asia/Tehran' });
-    
-    let message = `💰 *گزارش لحظه‌ای بازار* 💰\n📅 ${dateFa}\n\n`;
+  constructor(private readonly config: AppConfigService) {}
 
-    if (data.gold && data.gold.length > 0) {
-      message += `🔸 *طلا و سکه:*\n`;
-      data.gold.slice(0, 5).forEach((item: any) => {
-        message += `▫️ ${item.symbol}: ${Number(item.price).toLocaleString('fa-IR')} ریال\n`;
-      });
+  generatePricePoster(data: MarketData): string {
+    const displayUnit = this.config.displayUnit;
+    const lines: string[] = [
+      '💰 <b>گزارش لحظه‌ای بازار</b> 💰',
+      `📅 ${escapeHtml(tehranDateFa(new Date()))}`,
+    ];
+
+    if (data.gold.length > 0) {
+      lines.push('', '🔸 <b>طلا و سکه</b>');
+      for (const item of data.gold.slice(0, 5)) {
+        lines.push(
+          `▫️ ${escapeHtml(item.symbol)}: ${escapeHtml(formatMoney(item.priceInRial, displayUnit))}`,
+        );
+      }
     }
 
-    if (data.currency && data.currency.length > 0) {
-      message += `\n🔹 *ارزها:*\n`;
-      data.currency.slice(0, 5).forEach((item: any) => {
-        message += `▫️ ${item.symbol}: ${Number(item.price).toLocaleString('fa-IR')} ریال\n`;
-      });
+    if (data.currency.length > 0) {
+      lines.push('', '🔹 <b>ارز</b>');
+      for (const item of data.currency.slice(0, 5)) {
+        lines.push(
+          `▫️ ${escapeHtml(item.symbol)}: ${escapeHtml(formatMoney(item.priceInRial, displayUnit))}`,
+        );
+      }
     }
 
-    message += `\n🆔 @atabak_gold`;
-    return message;
+    lines.push('', ...buildBrandFooterLines());
+
+    return lines.join('\n');
   }
 }

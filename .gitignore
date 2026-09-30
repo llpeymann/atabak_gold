@@ -42,9 +42,14 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
-# temp directory
+# the template must stay tracked
+!.env.example
+
+# temp directory and generated runtime data
+/temp
 .temp
 .tmp
+daily-prices.json
 
 # Runtime data
 pids

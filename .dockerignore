@@ -1,9 +1,19 @@
+# Build context excludes — the image only needs source, package manifests and config.
 node_modules
 dist
-npm-debug.log
+coverage
 .git
 .gitignore
-.env
-Dockerfile
 .dockerignore
+Dockerfile
+dockerfile
+docker-compose.yml
+README.md
+docs
+test
+temp
+.env
+.env.*
+npm-debug.log*
+*.log
 daily-prices.json
