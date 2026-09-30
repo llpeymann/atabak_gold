@@ -161,8 +161,8 @@ Price API ─► PriceService (transport-only: timeout + retry محدود + خر
 
 ## 10. پوشش تست
 
-`npx jest --coverage` → Statements **91.16%** (929/1019)، Branches **83.93%** (580/691)،
-Functions **93.44%** (171/183)، Lines **91.28%** (890/975).
+`npx jest --coverage` → Statements **91.23%** (937/1027)، Branches **84.21%** (592/703)،
+Functions **93.47%** (172/184)، Lines **91.35%** (898/983).
 
 | ماژول | Statements | Branch |
 | --- | --- | --- |
