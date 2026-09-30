@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { describeError } from './common/log-safety';
 import { AppConfigService } from './config/app-config.service';
+import { UserStore } from './users/user.store';
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
@@ -14,6 +15,9 @@ async function bootstrap(): Promise<void> {
 
   const config = app.get(AppConfigService);
   const port = config.port;
+
+  // Load persisted users/favorites before the first interaction is served.
+  await app.get(UserStore).ensureLoaded();
 
   // Bound to 0.0.0.0 so the app is reachable from outside the container.
   await app.listen(port, '0.0.0.0');

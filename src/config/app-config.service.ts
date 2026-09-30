@@ -92,6 +92,74 @@ export class AppConfigService {
     return trimmed === '' ? null : trimmed;
   }
 
+  // --- Phase 2: bot UX -------------------------------------------------------
+
+  /** Where users and their favorites are persisted (`null` disables persistence). */
+  get userDataFile(): string | null {
+    const value = this.configService.get<string>('USER_DATA_FILE');
+
+    if (value === undefined || value === null) {
+      return null;
+    }
+
+    const trimmed = String(value).trim();
+
+    return trimmed === '' ? null : trimmed;
+  }
+
+  /** Maximum favorites per user — the only place this limit is defined (§31, §62). */
+  get maxFavorites(): number {
+    return this.readInteger('MAX_FAVORITES', 10);
+  }
+
+  /** Official channel handle, used for display. */
+  get channelHandle(): string {
+    return this.readString('CHANNEL_HANDLE', '@tala_atabak');
+  }
+
+  /** Official channel URL used by the CTA button (single declaration, §35). */
+  get channelUrl(): string {
+    return this.readString('CHANNEL_URL', 'https://ble.ir/tala_atabak');
+  }
+
+  /** Inbound interaction switch: `false` keeps the pre-Phase-2 publish-only behaviour. */
+  get botPollingEnabled(): boolean {
+    return (
+      this.readString('BOT_POLLING_ENABLED', 'true').toLowerCase() === 'true'
+    );
+  }
+
+  /** Long-poll wait handed to the platform on every `getUpdates` call. */
+  get botPollTimeoutSeconds(): number {
+    const value = Number(
+      this.configService.get<string>('BOT_POLL_TIMEOUT_SECONDS'),
+    );
+
+    return Number.isInteger(value) && value >= 0 && value <= 120 ? value : 25;
+  }
+
+  /** Delay between polling attempts after a transport failure. */
+  get botPollRetryDelayMs(): number {
+    return this.readInteger('BOT_POLL_RETRY_DELAY_MS', 3000);
+  }
+
+  /**
+   * Bot tokens available for inbound and outbound calls. Bale is required (validated at
+   * startup); Telegram is optional and reuses the same token as the channel mirroring.
+   */
+  get botTokens(): { platform: 'bale' | 'telegram'; botToken: string }[] {
+    const tokens: { platform: 'bale' | 'telegram'; botToken: string }[] = [
+      { platform: 'bale', botToken: this.requireString('BALE_BOT_TOKEN') },
+    ];
+
+    const telegram = this.telegram;
+    if (telegram) {
+      tokens.push({ platform: 'telegram', botToken: telegram.botToken });
+    }
+
+    return tokens;
+  }
+
   /** Bale is a required platform: missing credentials fail fast here too. */
   get bale(): PlatformCredentials {
     return {
@@ -133,6 +201,14 @@ export class AppConfigService {
     }
 
     return String(value).trim();
+  }
+
+  private readString(key: string, fallback: string): string {
+    const value = this.configService.get<string>(key);
+
+    return value === undefined || value === null || String(value).trim() === ''
+      ? fallback
+      : String(value).trim();
   }
 
   private readInteger(key: string, fallback: number): number {

@@ -50,6 +50,20 @@ export const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   ANOMALY_ALERT_CHAT_ID: '',
   // De-duplication window per symbol+reason for anomaly alerts.
   ANOMALY_ALERT_COOLDOWN_MINUTES: '30',
+  // --- Phase 2: bot UX ---
+  // Where users and their favorites are persisted (empty string disables persistence).
+  USER_DATA_FILE: './data/users.json',
+  // Maximum number of favorite symbols per user (enforced server-side).
+  MAX_FAVORITES: '10',
+  // Official channel (single source of truth for the CTA).
+  CHANNEL_HANDLE: '@tala_atabak',
+  CHANNEL_URL: 'https://ble.ir/tala_atabak',
+  // Inbound interaction (long polling). Disabled keeps the previous publish-only behaviour.
+  BOT_POLLING_ENABLED: 'true',
+  // Long-poll wait in seconds, passed to the platform on every getUpdates call.
+  BOT_POLL_TIMEOUT_SECONDS: '25',
+  // Delay between two polling attempts after a transport failure.
+  BOT_POLL_RETRY_DELAY_MS: '3000',
 };
 
 const logger = new Logger('EnvironmentValidation');
@@ -110,6 +124,44 @@ function readNumber(
   if (!Number.isFinite(value) || value < min || value > max) {
     throw new EnvironmentValidationError(
       `Invalid ${key}: "${raw}" — expected a number between ${min} and ${max}`,
+    );
+  }
+
+  return raw;
+}
+
+/**
+ * Read a boolean flag. Only explicit truthy/falsy spellings are accepted, so a typo like
+ * `BOT_POLLING_ENABLED=yes` fails loudly instead of silently disabling user interaction.
+ */
+function readBoolean(env: Record<string, unknown>, key: string): string {
+  const raw = asString(env, key).toLowerCase();
+
+  if (raw !== 'true' && raw !== 'false') {
+    throw new EnvironmentValidationError(
+      `Invalid ${key}: "${raw}" — expected "true" or "false"`,
+    );
+  }
+
+  return raw;
+}
+
+/** Validate an absolute http(s) URL and return it unchanged. */
+function readUrl(env: Record<string, unknown>, key: string): string {
+  const raw = asString(env, key);
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new EnvironmentValidationError(
+      `Invalid ${key}: "${raw}" is not a valid absolute URL`,
+    );
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new EnvironmentValidationError(
+      `Invalid ${key}: protocol "${parsed.protocol}" is not supported (use http or https)`,
     );
   }
 
@@ -285,6 +337,29 @@ export function validateEnvironment(
     10_080,
   );
   parseThresholdOverrides(env.PRICE_THRESHOLD_OVERRIDES); // validation only
+
+  const channelHandle = asString(env, 'CHANNEL_HANDLE');
+  if (!/^@[A-Za-z0-9_]{3,64}$/.test(channelHandle)) {
+    throw new EnvironmentValidationError(
+      `Invalid CHANNEL_HANDLE: "${channelHandle}" — expected a handle such as @tala_atabak`,
+    );
+  }
+
+  env.MAX_FAVORITES = readInteger(env, 'MAX_FAVORITES', 1, 100);
+  env.BOT_POLLING_ENABLED = readBoolean(env, 'BOT_POLLING_ENABLED');
+  env.BOT_POLL_TIMEOUT_SECONDS = readInteger(
+    env,
+    'BOT_POLL_TIMEOUT_SECONDS',
+    0,
+    120,
+  );
+  env.BOT_POLL_RETRY_DELAY_MS = readInteger(
+    env,
+    'BOT_POLL_RETRY_DELAY_MS',
+    100,
+    300_000,
+  );
+  env.CHANNEL_URL = readUrl(env, 'CHANNEL_URL');
 
   env.PRICE_API_UNIT = readMoneyUnit(env, 'PRICE_API_UNIT');
   env.PRICE_DISPLAY_UNIT = readMoneyUnit(env, 'PRICE_DISPLAY_UNIT');

@@ -159,9 +159,9 @@ describe('MarketStateService', () => {
       );
 
       const state = service.getState(gold);
-      expect(state?.daily.high).toBe(17_200_000);
-      expect(state?.daily.low).toBe(17_000_000);
-      expect(state?.daily.current).toBe(17_200_000);
+      expect(state?.daily?.high).toBe(17_200_000);
+      expect(state?.daily?.low).toBe(17_000_000);
+      expect(state?.daily?.current).toBe(17_200_000);
     });
 
     it('resets daily statistics when the Tehran day changes', () => {
@@ -276,8 +276,8 @@ describe('MarketStateService', () => {
 
       expect(state?.currentPrice).toBe(17_100_000);
       expect(state?.lastValidPrice).toBe(17_100_000);
-      expect(state?.daily.open).toBe(17_000_000);
-      expect(state?.daily.high).toBe(17_100_000);
+      expect(state?.daily?.open).toBe(17_000_000);
+      expect(state?.daily?.high).toBe(17_100_000);
     });
 
     it('does not let a previous day contaminate the restored daily statistics', async () => {

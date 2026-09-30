@@ -6,7 +6,10 @@
  * that everything worked.
  */
 
-export type DeliveryPlatform = 'bale' | 'telegram';
+import { Platform } from '../platform/platform.types';
+
+/** Delivery targets are platform bots — the id union lives in `platform.types.ts`. */
+export type DeliveryPlatform = Platform;
 
 export interface DeliveryResult {
   platform: DeliveryPlatform;

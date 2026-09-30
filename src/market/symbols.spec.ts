@@ -1,8 +1,8 @@
-import { SymbolDefinition } from './market.types';
 import {
   buildSymbolRegistry,
   symbolsBySection,
   SYMBOL_DEFINITIONS,
+  SymbolDefinition,
 } from './symbols';
 import { createAppConfigService } from '../testing/test-doubles';
 

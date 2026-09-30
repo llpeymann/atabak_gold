@@ -151,7 +151,7 @@ describe('MarketEngineService (integration)', () => {
     const state = harness.marketState.getState(gold);
     expect(state?.currentPrice).toBe(17_000_000);
     expect(state?.lastValidPrice).toBe(17_000_000);
-    expect(state?.daily.high).toBe(17_000_000);
+    expect(state?.daily?.high).toBe(17_000_000);
   });
 
   it('recovers automatically after an anomaly', async () => {
@@ -317,8 +317,8 @@ describe('MarketEngineService (integration)', () => {
     )!;
     const state = harness.marketState.getState(definition);
     expect(state?.dayKey).toBe('2026-10-01');
-    expect(state?.daily.open).toBe(17_100_000);
-    expect(state?.daily.high).toBe(17_100_000);
+    expect(state?.daily?.open).toBe(17_100_000);
+    expect(state?.daily?.high).toBe(17_100_000);
     expect(state?.lastValidPrice).toBe(17_100_000);
   });
 

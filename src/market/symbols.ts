@@ -280,10 +280,34 @@ export const SYMBOL_DEFINITIONS: readonly SymbolDefinition[] = [
   },
 ];
 
+const SECTION_EMOJI: Record<MarketSection, string> = {
+  gold: '🟨',
+  coins: '🪙',
+  currency: '💰',
+};
+
+const SECTION_LABEL: Record<MarketSection, string> = {
+  gold: 'طلا',
+  coins: 'سکه',
+  currency: 'بازار ارز',
+};
+
+/**
+ * Section titles as plain text (no delivery markup). Every consumer that renders its own markup
+ * (the bot UX layer escapes the text and adds the emphasis itself) must use these, otherwise the
+ * markup of `SECTION_TITLES` would be escaped and shown to the user as literal tags.
+ */
+export const SECTION_NAMES: Record<MarketSection, string> = {
+  gold: `${SECTION_EMOJI.gold} ${SECTION_LABEL.gold}`,
+  coins: `${SECTION_EMOJI.coins} ${SECTION_LABEL.coins}`,
+  currency: `${SECTION_EMOJI.currency} ${SECTION_LABEL.currency}`,
+};
+
+/** Delivery-ready titles used by the Phase 1 channel message builder (output unchanged). */
 export const SECTION_TITLES: Record<MarketSection, string> = {
-  gold: '🟨 <b>طلا</b>',
-  coins: '🪙 <b>سکه</b>',
-  currency: '💰 <b>بازار ارز</b>',
+  gold: `${SECTION_EMOJI.gold} <b>${SECTION_LABEL.gold}</b>`,
+  coins: `${SECTION_EMOJI.coins} <b>${SECTION_LABEL.coins}</b>`,
+  currency: `${SECTION_EMOJI.currency} <b>${SECTION_LABEL.currency}</b>`,
 };
 
 export const SECTION_ORDER: readonly MarketSection[] = [
