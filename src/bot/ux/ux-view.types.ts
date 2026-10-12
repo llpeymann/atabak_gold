@@ -40,29 +40,8 @@ export interface PriceListView {
   lastUpdate: string | null;
   /** True when at least one shown symbol is served from stale state. */
   hasStale: boolean;
-  /** Number of symbols in the request scope that have no usable state at all. */
+  /** Labels of registry symbols without a validated price, in registry order. */
   missing: string[];
-}
-
-export interface MarketSnapshotLineView {
-  symbol: string;
-  label: string;
-  section: MarketSection;
-  unit: PriceUnit;
-  open: number;
-  high: number;
-  low: number;
-  current: number;
-  /** `current - open` (from Phase 1 daily statistics). */
-  change: number;
-  freshness: Freshness;
-  updatedAt: string;
-}
-
-export interface MarketSnapshotView {
-  lines: MarketSnapshotLineView[];
-  lastUpdate: string | null;
-  hasStale: boolean;
 }
 
 export interface FavoriteOptionView {

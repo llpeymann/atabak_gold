@@ -97,6 +97,52 @@ export function sectionKeyboard(screen: ScreenKey): Keyboard {
   return screenFooter({ refreshScreen: screen });
 }
 
+/**
+ * Phase 4 — hub of the market section (`📊 بازار`).
+ *
+ * The buttons only open other read-only screens; the refresh button re-renders the hub from the
+ * already-validated state and never asks the provider for a new price (§29, §43).
+ */
+export function marketKeyboard(): Keyboard {
+  return [
+    [
+      { text: '📊 گزارش امروز', callbackData: callbackDataForScreen('report') },
+      {
+        text: '📈 حرکت بازار',
+        callbackData: callbackDataForScreen('movement'),
+      },
+    ],
+    [
+      {
+        text: '🕐 آخرین بروزرسانی',
+        callbackData: callbackDataForScreen('last-update'),
+      },
+    ],
+    ...screenFooter({ refreshScreen: 'market' }),
+  ];
+}
+
+/** Detailed report (`📋 گزارش کامل`) — same data as the daily report, one line per field. */
+export function fullReportKeyboard(): Keyboard {
+  return [
+    [{ text: '📊 گزارش خلاصه', callbackData: callbackDataForScreen('report') }],
+    ...screenFooter({ refreshScreen: 'report-full' }),
+  ];
+}
+
+/** Compact daily report (`📊 گزارش امروز`) with the way to the detailed view. */
+export function dailyReportKeyboard(): Keyboard {
+  return [
+    [
+      {
+        text: '📋 گزارش کامل',
+        callbackData: callbackDataForScreen('report-full'),
+      },
+    ],
+    ...screenFooter({ refreshScreen: 'report' }),
+  ];
+}
+
 export function menuKeyboard(): Keyboard {
   return [
     ...mainMenuKeyboard(),

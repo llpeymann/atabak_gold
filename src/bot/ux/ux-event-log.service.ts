@@ -19,6 +19,10 @@ export type UxEvent =
   | 'gold_view'
   | 'coin_view'
   | 'market_view'
+  // Phase 4 — market intelligence screens.
+  | 'market_report_view'
+  | 'market_movement_view'
+  | 'market_last_update_view'
   | 'favorites_view'
   | 'favorites_manage_open'
   | 'favorite_added'

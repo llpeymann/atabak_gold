@@ -10,6 +10,7 @@ import {
   callbackDataForManageFavorites,
   callbackDataForScreen,
 } from './callback-data';
+import { MarketIntelligenceService } from '../../intelligence/market-intelligence.service';
 import { MarketViewService } from './market-view.service';
 import { UxEventLogService } from './ux-event-log.service';
 import { AppConfigService } from '../../config/app-config.service';
@@ -97,7 +98,12 @@ describe('favorites flow (integration)', () => {
     await store.ensureLoaded();
 
     const users = new UserService(config, store);
-    const views = new MarketViewService(config, market.marketState, users);
+    const views = new MarketViewService(
+      config,
+      market.marketState,
+      new MarketIntelligenceService(config, market.marketState),
+      users,
+    );
     const alertStore = new AlertStore(config);
     const alerts = new AlertService(
       config,

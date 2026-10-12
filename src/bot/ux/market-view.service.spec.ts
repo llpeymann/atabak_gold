@@ -1,3 +1,4 @@
+import { MarketIntelligenceService } from '../../intelligence/market-intelligence.service';
 import { MarketViewService } from './market-view.service';
 import {
   createMarketHarness,
@@ -14,7 +15,12 @@ const createViews = async (env: Record<string, string | undefined> = {}) => {
   const market = createMarketHarness(env);
   const config = market.config;
   const users = new UserService(config, new UserStore(config));
-  const views = new MarketViewService(config, market.marketState, users);
+  const views = new MarketViewService(
+    config,
+    market.marketState,
+    new MarketIntelligenceService(config, market.marketState),
+    users,
+  );
   const user = await users.resolveUser('bale', 'view-user');
 
   return { market, views, users, user };
@@ -96,20 +102,40 @@ describe('MarketViewService', () => {
     expect(list.missing).toContain('نیم سکه');
   });
 
-  it('builds the daily snapshot only from symbols with a daily window', async () => {
+  it('builds the Phase 4 intelligence snapshot for every registry symbol', async () => {
+    const { market, views } = await createViews();
+    // Only two symbols are fed, so the snapshot has to deal with a partial market (§52).
+    await seedMarketState(market, {
+      receivedAt: new Date('2026-09-30T09:00:00.000Z'),
+      replace: true,
+      prices: { IR_GOLD_18K: 17_500_000, IR_COIN_EMAMI: 92_000_000 },
+    });
+
+    const snapshot = views.buildIntelligence(VIEW_NOW);
+    const bySymbol = new Map(
+      snapshot.symbols.map((symbol) => [symbol.symbol, symbol]),
+    );
+
+    // Symbols with validated data carry their daily window …
+    expect(bySymbol.get('IR_GOLD_18K')?.open).toBe(17_500_000);
+    expect(bySymbol.get('IR_GOLD_18K')?.dailyChange).toBe(0);
+    expect(bySymbol.get('IR_COIN_EMAMI')?.availability).toBe('AVAILABLE');
+    // … and the rest are listed explicitly as unavailable instead of being dropped (§19, §20).
+    expect(bySymbol.get('TRY')?.availability).toBe('UNAVAILABLE');
+    expect(bySymbol.get('TRY')?.currentPrice).toBeNull();
+    expect(snapshot.symbols).toHaveLength(market.config.symbolRegistry.length);
+    expect(snapshot.summary.available).toBe(2);
+  });
+
+  it('projects a single symbol through the same read-only builder', async () => {
     const { market, views } = await createViews();
     await seedMarketState(market);
 
-    const snapshot = views.buildMarketSnapshot(VIEW_NOW);
+    const gold = views.buildSymbolIntelligence('IR_GOLD_18K', VIEW_NOW);
 
-    expect(snapshot.lines.map((line) => line.symbol)).toEqual([
-      'IR_GOLD_18K',
-      'IR_COIN_EMAMI',
-      'USD',
-    ]);
-    const gold = snapshot.lines[0];
-    expect(gold?.open).toBe(17_500_000);
-    expect(gold?.change).toBe(0);
+    expect(gold?.symbol).toBe('IR_GOLD_18K');
+    expect(gold?.currentPrice).toBe(17_500_000);
+    expect(views.buildSymbolIntelligence('NOT_A_SYMBOL', VIEW_NOW)).toBeNull();
   });
 
   it('builds favorites views for an explicit symbol list only', async () => {

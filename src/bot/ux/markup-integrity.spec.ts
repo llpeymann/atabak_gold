@@ -120,6 +120,23 @@ const scenarios: Scenario[] = [
     name: 'market',
     update: () => callback(callbackDataForScreen('market')),
   },
+  // Phase 4 — every market intelligence screen, with data and without it.
+  {
+    name: 'market report',
+    update: () => callback(callbackDataForScreen('report')),
+  },
+  {
+    name: 'market full report',
+    update: () => callback(callbackDataForScreen('report-full')),
+  },
+  {
+    name: 'market movement',
+    update: () => callback(callbackDataForScreen('movement')),
+  },
+  {
+    name: 'market last update',
+    update: () => callback(callbackDataForScreen('last-update')),
+  },
   {
     name: 'favorites (empty)',
     update: () => callback(callbackDataForScreen('favorites')),
@@ -218,10 +235,31 @@ const scenarios: Scenario[] = [
   {
     name: 'empty market state',
     prepare: (harness) => {
-      // A symbol with no state at all: the screen must stay valid and never fabricate a price.
+      // A symbol with no state at all: the screens must stay valid and never fabricate a price.
       jest.spyOn(harness.market.marketState, 'getState').mockReturnValue(null);
     },
     update: () => callback(callbackDataForScreen('market')),
+  },
+  {
+    name: 'empty market report',
+    prepare: (harness) => {
+      jest.spyOn(harness.market.marketState, 'getState').mockReturnValue(null);
+    },
+    update: () => callback(callbackDataForScreen('report')),
+  },
+  {
+    name: 'empty market movement',
+    prepare: (harness) => {
+      jest.spyOn(harness.market.marketState, 'getState').mockReturnValue(null);
+    },
+    update: () => callback(callbackDataForScreen('movement')),
+  },
+  {
+    name: 'empty market last update',
+    prepare: (harness) => {
+      jest.spyOn(harness.market.marketState, 'getState').mockReturnValue(null);
+    },
+    update: () => callback(callbackDataForScreen('last-update')),
   },
 ];
 
@@ -232,7 +270,10 @@ describe('rendered markup integrity', () => {
 
       if (
         scenario.name !== 'stale prices' &&
-        scenario.name !== 'empty market state'
+        scenario.name !== 'empty market state' &&
+        scenario.name !== 'empty market report' &&
+        scenario.name !== 'empty market movement' &&
+        scenario.name !== 'empty market last update'
       ) {
         await seedMarketState(harness);
       }

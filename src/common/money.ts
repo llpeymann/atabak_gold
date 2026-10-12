@@ -100,12 +100,29 @@ export function formatMoney(
   return `${decimalFormatterFa.format(converted)} ${MONEY_UNIT_LABELS[displayUnit]}`;
 }
 
+/**
+ * Percentage suffixes used across the bot.
+ *
+ * `%` is the sign the Phase 1-3 screens have always used (their rendered output must not change);
+ * `٪` is the Persian percent sign used by the Phase 4 market report (Phase 4 spec, §37). Both share
+ * the implementation below, so the sign and rounding rules cannot drift apart.
+ */
+export type PercentSuffix = '%' | '٪';
+
 /** Format a percentage value rounded to at most two decimals, with an explicit sign. */
-export function formatPercentFa(raw: unknown): string | null {
+export function formatPercentFa(
+  raw: unknown,
+  suffix: PercentSuffix = '%',
+): string | null {
   const value = parseAmount(raw);
   if (value === null) {
     return null;
   }
   const sign = value > 0 ? '+' : value < 0 ? '−' : '';
-  return `${sign}${decimalFormatterFa.format(Math.abs(value))}%`;
+  return `${sign}${decimalFormatterFa.format(Math.abs(value))}${suffix}`;
+}
+
+/** Same value, rendered with the Persian percent sign for the Phase 4 market screens. */
+export function formatPercentSignFa(raw: unknown): string | null {
+  return formatPercentFa(raw, '٪');
 }

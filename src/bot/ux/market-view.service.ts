@@ -1,14 +1,17 @@
 import { Injectable } from '@nestjs/common';
 
 import { AppConfigService } from '../../config/app-config.service';
+import {
+  MarketIntelligenceSnapshot,
+  MarketSymbolSnapshot,
+} from '../../intelligence/market-intelligence.types';
+import { MarketIntelligenceService } from '../../intelligence/market-intelligence.service';
 import { MarketStateService } from '../../market/market-state.service';
 import { MarketSection, SymbolMarketState } from '../../market/market.types';
 import { SECTION_NAMES, SymbolDefinition } from '../../market/symbols';
 import { UserService } from '../../users/user.service';
 import {
   FavoritesManageView,
-  MarketSnapshotLineView,
-  MarketSnapshotView,
   PriceListView,
   PriceSectionView,
   PriceView,
@@ -26,6 +29,7 @@ export class MarketViewService {
   constructor(
     private readonly config: AppConfigService,
     private readonly marketState: MarketStateService,
+    private readonly intelligence: MarketIntelligenceService,
     private readonly users: UserService,
   ) {}
 
@@ -126,42 +130,26 @@ export class MarketViewService {
     };
   }
 
-  /** Daily snapshot (open/high/low/current/change) for the anchor symbols. */
-  buildMarketSnapshot(now = new Date()): MarketSnapshotView {
-    const definitions = this.config.symbolRegistry.filter(
-      (definition) => definition.required,
-    );
+  /**
+   * Phase 4 — the complete market intelligence snapshot (`📊 بازار`).
+   *
+   * One read pass over the validated Phase 1 state; nothing is fetched, recalculated from raw
+   * payloads or mutated here (§15, §42, §43). Rending this again is exactly what the
+   * `🔄 بروزرسانی` button does.
+   */
+  buildIntelligence(now = new Date()): MarketIntelligenceSnapshot {
+    return this.intelligence.build(now);
+  }
 
-    const lines: MarketSnapshotLineView[] = [];
-
-    for (const definition of definitions) {
-      const state = this.marketState.getState(definition, now);
-
-      // Only instruments with a real (validated) daily window are shown — nothing is invented.
-      if (!state?.daily) {
-        continue;
-      }
-
-      lines.push({
-        symbol: state.symbol,
-        label: state.label,
-        section: state.section,
-        unit: state.unit,
-        open: state.daily.open,
-        high: state.daily.high,
-        low: state.daily.low,
-        current: state.daily.current,
-        change: state.daily.change,
-        freshness: state.freshness,
-        updatedAt: state.updatedAt,
-      });
-    }
-
-    return {
-      lines,
-      lastUpdate: this.newestUpdate(lines.map((line) => line.updatedAt)),
-      hasStale: lines.some((line) => line.freshness === 'STALE'),
-    };
+  /**
+   * Single-symbol projection for screens that focus on one instrument (the favourites list).
+   * Same read-only snapshot builder, no separate calculation path.
+   */
+  buildSymbolIntelligence(
+    symbol: string,
+    now = new Date(),
+  ): MarketSymbolSnapshot | null {
+    return this.intelligence.buildFor(symbol, now);
   }
 
   /** Favorite management options (all supported symbols, marked with the user's selection). */

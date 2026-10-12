@@ -167,7 +167,16 @@ describe('Bot UX (e2e)', () => {
 
     await botUx.handleUpdate(callback('v1:back'));
     await botUx.handleUpdate(callback('v1:screen:market'));
-    expect(lastText()).toContain('وضعیت بازار امروز');
+    // Phase 4 turned `📊 بازار` into the hub of the market intelligence reports.
+    expect(lastText()).toContain('📊 <b>بازار</b>');
+    expect(lastText()).toContain('📊 گزارش امروز');
+    expect(lastText()).toContain('📈 حرکت بازار');
+    expect(lastText()).toContain('🕐 آخرین بروزرسانی');
+
+    await botUx.handleUpdate(callback('v1:back'));
+    await botUx.handleUpdate(callback('v1:screen:report'));
+    expect(lastText()).toContain('📊 <b>گزارش امروز</b>');
+    expect(lastText()).toContain('تغییر روزانه:');
 
     await botUx.handleUpdate(callback('v1:back'));
     await botUx.handleUpdate(callback('v1:screen:favorites'));

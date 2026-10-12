@@ -5,8 +5,6 @@ import { formatPriceValue } from '../../market/price-format';
 import { PriceDirection, PriceUnit } from '../../market/market.types';
 import {
   FavoritesManageView,
-  MarketSnapshotLineView,
-  MarketSnapshotView,
   PriceListView,
   PriceSectionView,
   PriceView,
@@ -175,58 +173,6 @@ export function formatPriceScreen(
   return tidy(lines);
 }
 
-/** Daily market snapshot (`📊 بازار`) built exclusively from Phase 1 daily statistics (§17, §18). */
-export function formatMarketSnapshot(
-  view: MarketSnapshotView,
-  displayUnit: MoneyUnit,
-): string {
-  const lines = ['📊 <b>وضعیت بازار امروز</b>', ''];
-
-  if (view.lines.length === 0) {
-    lines.push(
-      'اطلاعات بازار هنوز آماده نیست.',
-      '',
-      'پس از دریافت اولین قیمت معتبر امروز، خلاصه بازار اینجا نمایش داده میشود.',
-    );
-    return lines.join('\n');
-  }
-
-  if (view.hasStale) {
-    lines.push(formatStaleNotice(), '');
-  }
-
-  for (const line of view.lines) {
-    lines.push(...formatSnapshotLine(line, displayUnit), '');
-  }
-
-  const lastUpdate = formatLastUpdateLabel(view.lastUpdate);
-  if (lastUpdate) {
-    lines.push(lastUpdate);
-  }
-
-  return tidy(lines);
-}
-
-function formatSnapshotLine(
-  line: MarketSnapshotLineView,
-  displayUnit: MoneyUnit,
-): string[] {
-  const direction: PriceDirection =
-    line.change > 0 ? 'UP' : line.change < 0 ? 'DOWN' : 'UNCHANGED';
-  const changePercent =
-    line.open === 0 ? null : (line.change / line.open) * 100;
-  const change = formatChangeIndicator(direction, changePercent);
-
-  return [
-    `<b>${escapeHtml(line.label)}</b>`,
-    `شروع روز: ${formatPriceValueText(line.open, line.unit, displayUnit)}`,
-    `اکنون: ${formatPriceValueText(line.current, line.unit, displayUnit)}`,
-    `بیشترین: ${formatPriceValueText(line.high, line.unit, displayUnit)}`,
-    `کمترین: ${formatPriceValueText(line.low, line.unit, displayUnit)}`,
-    `تغییر: ${change ?? '—'}`,
-  ];
-}
-
 /** Favorites list (`⭐ علاقهمندیهای من`). */
 export function formatFavoritesScreen(
   view: PriceListView,
@@ -341,7 +287,7 @@ export function formatEmptySection(sectionTitle: string): string {
 }
 
 /** Collapse the blank lines introduced by section rendering. */
-function tidy(lines: string[]): string {
+export function tidy(lines: string[]): string {
   return lines
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')

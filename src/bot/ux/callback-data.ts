@@ -17,13 +17,28 @@ export type { AlertTypeKey } from './alert-callback.types';
 export const CALLBACK_VERSION = 'v1';
 
 export type ScreenKey =
-  'prices' | 'gold' | 'coins' | 'market' | 'favorites' | 'alerts' | 'channel';
+  | 'prices'
+  | 'gold'
+  | 'coins'
+  | 'market'
+  // Phase 4 — Market Intelligence screens, all children of the `market` hub.
+  | 'report'
+  | 'report-full'
+  | 'movement'
+  | 'last-update'
+  | 'favorites'
+  | 'alerts'
+  | 'channel';
 
 export const SCREEN_KEYS: readonly ScreenKey[] = [
   'prices',
   'gold',
   'coins',
   'market',
+  'report',
+  'report-full',
+  'movement',
+  'last-update',
   'favorites',
   'alerts',
   'channel',

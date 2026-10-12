@@ -16,6 +16,7 @@ import { BotUxService } from './bot/ux/bot-ux.service';
 import { MarketViewService } from './bot/ux/market-view.service';
 import { UxEventLogService } from './bot/ux/ux-event-log.service';
 import { AppConfigService } from './config/app-config.service';
+import { MarketIntelligenceService } from './intelligence/market-intelligence.service';
 import { validateEnvironment } from './config/env.validation';
 import { AnomalyAlertService } from './market/anomaly-alert.service';
 import { MarketEngineService } from './market/market-engine.service';
@@ -67,6 +68,8 @@ import { UserStore } from './users/user.store';
     UserService,
     BotApiClient,
     PlatformRegistry,
+    // Phase 4 — market intelligence (read-only projection of the Phase 1 state).
+    MarketIntelligenceService,
     MarketViewService,
     UxEventLogService,
     BotUxService,

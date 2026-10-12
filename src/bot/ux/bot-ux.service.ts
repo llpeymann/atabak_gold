@@ -45,6 +45,12 @@ import {
   formatTargetPrompt,
   formatTypePrompt,
 } from '../../alerts/alert-format';
+import {
+  formatDailyReportScreen,
+  formatLastUpdateScreen,
+  formatMarketHub,
+  formatMovementScreen,
+} from './market-format';
 import { parsePercentInput, parsePriceInput } from './number-input';
 import { MarketViewService } from './market-view.service';
 import { UxEventLogService } from './ux-event-log.service';
@@ -55,7 +61,6 @@ import {
   formatFavoriteLimitReached,
   formatFavoritesManageScreen,
   formatFavoritesScreen,
-  formatMarketSnapshot,
   formatMenuScreen,
   formatPriceScreen,
   formatWelcomeScreen,
@@ -72,8 +77,11 @@ import {
   alertsKeyboard,
   alertsListKeyboard,
   channelKeyboard,
+  dailyReportKeyboard,
   expiredCallbackKeyboard,
   favoritesKeyboard,
+  fullReportKeyboard,
+  marketKeyboard,
   favoritesManageKeyboard,
   mainMenuKeyboard,
   menuKeyboard,
@@ -441,6 +449,17 @@ export class BotUxService {
           case 'market':
             this.events.record('market_view', base);
             return;
+          // Phase 4 — the intelligence screens are logged with the market vocabulary.
+          case 'report':
+          case 'report-full':
+            this.events.record('market_report_view', base);
+            return;
+          case 'movement':
+            this.events.record('market_movement_view', base);
+            return;
+          case 'last-update':
+            this.events.record('market_last_update_view', base);
+            return;
           case 'favorites':
             this.events.record('favorites_view', base);
             return;
@@ -524,12 +543,48 @@ export class BotUxService {
         };
       }
 
+      // Phase 4 — `📊 بازار` is the entry point of the market intelligence screens (§29).
       case 'market': {
-        const view = this.views.buildMarketSnapshot(now);
         return {
           screen: 'market',
-          text: formatMarketSnapshot(view, displayUnit),
-          keyboard: sectionKeyboard('market'),
+          text: formatMarketHub(),
+          keyboard: marketKeyboard(),
+        };
+      }
+
+      case 'report': {
+        const view = this.views.buildIntelligence(now);
+        return {
+          screen: 'report',
+          text: formatDailyReportScreen(view, displayUnit),
+          keyboard: dailyReportKeyboard(),
+        };
+      }
+
+      case 'report-full': {
+        const view = this.views.buildIntelligence(now);
+        return {
+          screen: 'report-full',
+          text: formatDailyReportScreen(view, displayUnit, { detailed: true }),
+          keyboard: fullReportKeyboard(),
+        };
+      }
+
+      case 'movement': {
+        const view = this.views.buildIntelligence(now);
+        return {
+          screen: 'movement',
+          text: formatMovementScreen(view, displayUnit),
+          keyboard: sectionKeyboard('movement'),
+        };
+      }
+
+      case 'last-update': {
+        const view = this.views.buildIntelligence(now);
+        return {
+          screen: 'last-update',
+          text: formatLastUpdateScreen(view),
+          keyboard: sectionKeyboard('last-update'),
         };
       }
 
@@ -1342,6 +1397,12 @@ export class BotUxService {
   /** Back always returns to the logical parent — never into a loop (§8). */
   private parentOf(screen: UxScreen): UxScreen {
     switch (screen) {
+      // Phase 4 — every market intelligence screen is a child of the `📊 بازار` hub (§29).
+      case 'report':
+      case 'report-full':
+      case 'movement':
+      case 'last-update':
+        return 'market';
       case 'favorites-manage':
         return 'favorites';
       case 'alerts-list':

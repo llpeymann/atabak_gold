@@ -2,6 +2,7 @@ import { AlertService } from '../../alerts/alert.service';
 import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
 import { callbackDataForScreen } from './callback-data';
+import { MarketIntelligenceService } from '../../intelligence/market-intelligence.service';
 import { MarketViewService } from './market-view.service';
 import { UxEventLogService } from './ux-event-log.service';
 import { MarketEngineService } from '../../market/market-engine.service';
@@ -60,7 +61,12 @@ describe('market flow (integration)', () => {
     const market = createMarketHarness(env);
     const store = new UserStore(config);
     const users = new UserService(config, store);
-    const views = new MarketViewService(config, market.marketState, users);
+    const views = new MarketViewService(
+      config,
+      market.marketState,
+      new MarketIntelligenceService(config, market.marketState),
+      users,
+    );
     const events = new UxEventLogService();
 
     // A provider that records every call: the UX layer must never use it.
@@ -193,6 +199,129 @@ describe('market flow (integration)', () => {
     await botUx.handleUpdate(callback(refresh!.callbackData!));
 
     expect(lastCall(platform.calls).text).toContain('۱۷٬۵۰۰٬۰۰۰ ریال');
+  });
+
+  describe('Phase 4 — market intelligence refresh (§42, §43, §54)', () => {
+    it('re-renders the market report without fetching a price or moving the timestamp', async () => {
+      const { botUx, platform, market, providerCalls } = build();
+      const receivedAt = new Date(Date.now() - 5 * 60_000);
+      await seedMarketState(market, { receivedAt });
+
+      await botUx.handleUpdate(callback(callbackDataForScreen('report')));
+      const first = lastCall(platform.calls);
+      expect(first.text).toContain('🕐');
+
+      const refresh = keyboardButtons(first).find(
+        (button) => button.text === '↻ بروزرسانی',
+      );
+      expect(refresh?.callbackData).toBe('v1:screen:report');
+
+      await botUx.handleUpdate(callback(refresh!.callbackData!));
+
+      const second = lastCall(platform.calls);
+      // Same screen, same values, and above all the same real market timestamp.
+      expect(second.text).toContain('📊 <b>گزارش امروز</b>');
+      expect(second.text).toContain('۱۷٬۵۰۰٬۰۰۰ ریال');
+      const timeIn = (text: string): string =>
+        text.match(/🕐 ([۰-۹:]+)/)?.[1] ?? '';
+      expect(timeIn(second.text ?? '')).toBe(timeIn(first.text ?? ''));
+      expect(timeIn(second.text ?? '')).not.toBe('');
+      // No provider call, and the market state itself was not advanced by the refresh.
+      expect(providerCalls).toHaveLength(0);
+      expect(market.marketState.getLastValidPrice('IR_GOLD_18K')).toBe(
+        17_500_000,
+      );
+      const gold = market.config.symbolRegistry.find(
+        (definition) => definition.symbol === 'IR_GOLD_18K',
+      )!;
+      expect(market.marketState.getState(gold)?.updatedAt).toBe(
+        receivedAt.toISOString(),
+      );
+    });
+
+    it('reads the validated market state once per symbol and never per API call', async () => {
+      const { botUx, market } = build();
+      await seedMarketState(market, { receivedAt: new Date() });
+      const spy = jest.spyOn(market.marketState, 'getState');
+
+      await botUx.handleUpdate(callback(callbackDataForScreen('report')));
+
+      // One read pass over the registry: no N+1, no per-symbol network round trip (§42).
+      expect(spy).toHaveBeenCalledTimes(market.config.symbolRegistry.length);
+    });
+
+    it('keeps the daily report and the movement report on separate bases (§23)', async () => {
+      const { botUx, platform, market } = build();
+      await seedMarketState(market, {
+        receivedAt: new Date(),
+        replace: true,
+        prices: { IR_GOLD_18K: 17_000_000 },
+      });
+      await seedMarketState(market, {
+        receivedAt: new Date(),
+        replace: true,
+        prices: { IR_GOLD_18K: 17_200_000 },
+      });
+      await seedMarketState(market, {
+        receivedAt: new Date(),
+        replace: true,
+        prices: { IR_GOLD_18K: 17_150_000 },
+      });
+
+      await botUx.handleUpdate(callback(callbackDataForScreen('report')));
+      const report = lastCall(platform.calls).text ?? '';
+
+      await botUx.handleUpdate(callback(callbackDataForScreen('movement')));
+      const movement = lastCall(platform.calls).text ?? '';
+
+      // Daily: 17,000,000 → 17,150,000 (open of the day); movement: 17,200,000 → 17,150,000.
+      expect(report).toContain('تغییر روزانه: 🟢 +۱۵۰٬۰۰۰ ریال | +۰٫۸۸٪');
+      expect(report).not.toContain('−۵۰٬۰۰۰');
+      // Movement carries both the absolute move and its percentage, on its own basis.
+      expect(movement).toContain('🔴 −۵۰٬۰۰۰ ریال | −۰٫۲۹٪');
+      expect(movement).toContain('قیمت قبلی: ۱۷٬۲۰۰٬۰۰۰ ریال');
+    });
+
+    it('degrades to the unavailable screen when the market-state read fails (§45)', async () => {
+      const { botUx, platform, market } = build();
+      jest.spyOn(market.marketState, 'getState').mockImplementation(() => {
+        throw new Error('state store unavailable');
+      });
+
+      for (const screen of ['report', 'movement', 'last-update'] as const) {
+        await botUx.handleUpdate(callback(callbackDataForScreen(screen)));
+        const text = lastCall(platform.calls).text ?? '';
+
+        // A friendly screen — no crash, no empty message, no technical detail (§45).
+        expect(text).toContain('اطلاعات معتبر بازار در دسترس نیست');
+        expect(text).not.toContain('state store unavailable');
+        expect(text).not.toContain('undefined');
+      }
+    });
+
+    it('keeps the report alive when only one symbol cannot be read (§20, §52)', async () => {
+      const { botUx, platform, market } = build();
+      await seedMarketState(market, { receivedAt: new Date() });
+      const real = market.marketState.getState.bind(market.marketState);
+      jest
+        .spyOn(market.marketState, 'getState')
+        .mockImplementation((definition, now) => {
+          if (definition.symbol === 'USD') {
+            throw new Error('single symbol read failed');
+          }
+
+          return real(definition, now);
+        });
+
+      await botUx.handleUpdate(callback(callbackDataForScreen('report')));
+
+      const text = lastCall(platform.calls).text ?? '';
+      // The other symbols are still reported, and the broken one is explicitly unavailable.
+      expect(text).toContain('طلای ۱۸ عیار');
+      expect(text).toContain('دلار');
+      expect(text).toContain('⚠️ فعلاً اطلاعات معتبری در دسترس نیست.');
+      expect(text).not.toContain('single symbol read failed');
+    });
   });
 
   it('exposes the Phase 1 pipeline as the single price source', () => {

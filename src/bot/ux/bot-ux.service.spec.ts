@@ -1,4 +1,5 @@
 import {
+  callbackDataForBack,
   callbackDataForFavorite,
   callbackDataForScreen,
 } from './callback-data';
@@ -198,33 +199,130 @@ describe('BotUxService', () => {
     });
   });
 
-  describe('market snapshot', () => {
-    it('shows open/high/low/current/change for the anchor symbols', async () => {
-      // Seeded "now" keeps the snapshot fresh (matches how the scheduler feeds the engine).
+  describe('market section (§29–§31)', () => {
+    it('opens the market hub with the three Phase 4 reports', async () => {
+      const hub = createUxHarness();
+
+      await hub.botUx.handleUpdate(callback(callbackDataForScreen('market')));
+      const text = hub.last().text ?? '';
+
+      expect(text).toContain('📊 <b>بازار</b>');
+      expect(text).toContain('📊 گزارش امروز');
+      expect(text).toContain('📈 حرکت بازار');
+      expect(text).toContain('🕐 آخرین بروزرسانی');
+      // The hub must state that refreshing does not fetch a new price (§43).
+      expect(text).toContain('قیمت تازه‌ای نمی‌گیرد');
+      expect(keyboardButtons(hub.last()).map((button) => button.text)).toEqual([
+        '📊 گزارش امروز',
+        '📈 حرکت بازار',
+        '🕐 آخرین بروزرسانی',
+        '↻ بروزرسانی',
+        '⬅️ بازگشت',
+        '🏠 منوی اصلی',
+      ]);
+    });
+
+    it('shows the daily report with open, current, high, low and change', async () => {
       const current = createUxHarness();
       await seedMarketState(current, { receivedAt: new Date() });
 
       await current.botUx.handleUpdate(
-        callback(callbackDataForScreen('market')),
+        callback(callbackDataForScreen('report')),
       );
       const text = current.last().text ?? '';
 
-      expect(text).toContain('📊 <b>وضعیت بازار امروز</b>');
-      expect(text).toContain('شروع روز:');
-      expect(text).toContain('اکنون:');
-      expect(text).toContain('بیشترین:');
-      expect(text).toContain('کمترین:');
-      expect(text).toContain('تغییر:');
+      expect(text).toContain('📊 <b>گزارش امروز</b>');
       expect(text).toContain('طلای ۱۸ عیار');
       expect(text).toContain('سکه امامی');
       expect(text).toContain('دلار');
+      expect(text).toContain('اکنون:');
+      expect(text).toContain('تغییر روزانه:');
+
+      // The detailed report adds the daily window fields of §7.
+      await current.botUx.handleUpdate(
+        callback(callbackDataForScreen('report-full')),
+      );
+      const detailed = current.last().text ?? '';
+
+      expect(detailed).toContain('📋 <b>گزارش کامل امروز</b>');
+      expect(detailed).toContain('شروع روز:');
+      expect(detailed).toContain('بیشترین:');
+      expect(detailed).toContain('کمترین:');
     });
 
-    it('shows the prepared empty state without a daily window', async () => {
-      const empty = createUxHarness();
-      await empty.botUx.handleUpdate(callback(callbackDataForScreen('market')));
+    it('shows the movement report against the previous valid price', async () => {
+      const current = createUxHarness();
+      // Two accepted cycles: the second one gives the symbol a previous valid price (§23).
+      await seedMarketState(current, {
+        receivedAt: new Date(),
+        replace: true,
+        prices: { IR_GOLD_18K: 17_400_000 },
+      });
+      await seedMarketState(current, {
+        receivedAt: new Date(),
+        replace: true,
+        prices: { IR_GOLD_18K: 17_500_000 },
+      });
 
-      expect(empty.last().text).toContain('اطلاعات بازار هنوز آماده نیست.');
+      await current.botUx.handleUpdate(
+        callback(callbackDataForScreen('movement')),
+      );
+      const text = current.last().text ?? '';
+
+      expect(text).toContain('📈 <b>حرکت بازار</b>');
+      expect(text).toContain('نسبت به آخرین بروزرسانی');
+      expect(text).toContain('قیمت قبلی: ۱۷٬۴۰۰٬۰۰۰ ریال');
+      expect(text).toContain('قیمت فعلی: ۱۷٬۵۰۰٬۰۰۰ ریال');
+    });
+
+    it('shows the last update times per symbol', async () => {
+      const current = createUxHarness();
+      await seedMarketState(current, { receivedAt: new Date() });
+
+      await current.botUx.handleUpdate(
+        callback(callbackDataForScreen('last-update')),
+      );
+      const text = current.last().text ?? '';
+
+      expect(text).toContain('🕐 <b>آخرین بروزرسانی</b>');
+      expect(text).toContain('✅ تازه');
+      expect(text).toContain('طلای ۱۸ عیار');
+    });
+
+    it('answers every market screen with the prepared empty state', async () => {
+      const empty = createUxHarness();
+
+      for (const screen of [
+        'report',
+        'report-full',
+        'movement',
+        'last-update',
+      ] as const) {
+        await empty.botUx.handleUpdate(callback(callbackDataForScreen(screen)));
+        const text = empty.last().text ?? '';
+
+        expect(text).toContain('اطلاعات معتبر بازار در دسترس نیست');
+        expect(text).not.toContain('undefined');
+      }
+    });
+
+    it('returns from every market screen to the hub with back', async () => {
+      const harness = createUxHarness();
+      await seedMarketState(harness, { receivedAt: new Date() });
+
+      for (const screen of [
+        'report',
+        'report-full',
+        'movement',
+        'last-update',
+      ] as const) {
+        await harness.botUx.handleUpdate(
+          callback(callbackDataForScreen(screen)),
+        );
+        await harness.botUx.handleUpdate(callback(callbackDataForBack()));
+
+        expect(harness.last().text).toContain('📊 <b>بازار</b>');
+      }
     });
   });
 

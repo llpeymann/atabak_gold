@@ -11,6 +11,7 @@ import { AlertService } from '../alerts/alert.service';
 import { AlertStore } from '../alerts/alert.store';
 import { BotUxService } from '../bot/ux/bot-ux.service';
 import { MarketViewService } from '../bot/ux/market-view.service';
+import { MarketIntelligenceService } from '../intelligence/market-intelligence.service';
 import { UxEventLogService } from '../bot/ux/ux-event-log.service';
 import { BotApiClient } from '../platform/bot-api.client';
 import { PlatformRegistry } from '../platform/platform-registry.service';
@@ -442,7 +443,16 @@ export function createUxHarness(
   });
   const store = options.store ?? new UserStore(config);
   const users = new UserService(config, store);
-  const views = new MarketViewService(config, market.marketState, users);
+  const intelligence = new MarketIntelligenceService(
+    config,
+    market.marketState,
+  );
+  const views = new MarketViewService(
+    config,
+    market.marketState,
+    intelligence,
+    users,
+  );
   const events = new UxEventLogService();
   const alertStore = options.alertStore ?? new AlertStore(config);
   const alerts = new AlertService(

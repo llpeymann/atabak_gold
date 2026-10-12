@@ -7,18 +7,13 @@ import {
   formatFavoritesManageScreen,
   formatFavoritesScreen,
   formatLastUpdateLabel,
-  formatMarketSnapshot,
   formatMenuScreen,
   formatPriceScreen,
   formatStaleNotice,
   formatTehranTime,
   formatWelcomeScreen,
 } from './ux-format';
-import {
-  FavoritesManageView,
-  MarketSnapshotView,
-  PriceListView,
-} from './ux-view.types';
+import { FavoritesManageView, PriceListView } from './ux-view.types';
 
 const priceView = (
   overrides: Partial<PriceListView['sections'][number]['items'][number]> = {},
@@ -152,47 +147,6 @@ describe('price screen', () => {
     );
 
     expect(text).toContain('اطلاعات معتبری برای «سکه»');
-  });
-});
-
-describe('market snapshot', () => {
-  const snapshot: MarketSnapshotView = {
-    lines: [
-      {
-        symbol: 'IR_GOLD_18K',
-        label: 'طلای ۱۸ عیار',
-        section: 'gold',
-        unit: 'RIAL',
-        open: 17_000_000,
-        high: 17_500_000,
-        low: 16_900_000,
-        current: 17_500_000,
-        change: 500_000,
-        freshness: 'FRESH',
-        updatedAt: '2026-09-30T09:30:00.000Z',
-      },
-    ],
-    lastUpdate: '2026-09-30T09:30:00.000Z',
-    hasStale: false,
-  };
-
-  it('renders open, current, high, low and change', () => {
-    const text = formatMarketSnapshot(snapshot, 'RIAL');
-
-    expect(text).toContain('شروع روز: ۱۷٬۰۰۰٬۰۰۰ ریال');
-    expect(text).toContain('اکنون: ۱۷٬۵۰۰٬۰۰۰ ریال');
-    expect(text).toContain('بیشترین: ۱۷٬۵۰۰٬۰۰۰ ریال');
-    expect(text).toContain('کمترین: ۱۶٬۹۰۰٬۰۰۰ ریال');
-    expect(text).toContain('تغییر: 🟢 +۲٫۹۴%');
-  });
-
-  it('shows the prepared empty state', () => {
-    const text = formatMarketSnapshot(
-      { lines: [], lastUpdate: null, hasStale: false },
-      'RIAL',
-    );
-
-    expect(text).toContain('اطلاعات بازار هنوز آماده نیست.');
   });
 });
 
