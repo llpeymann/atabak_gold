@@ -10,6 +10,7 @@
  *    identity resolved server-side.
  */
 
+import { isSafeChannelId } from '../../channel/channel.types';
 import { AlertTypeKey, isAlertTypeKey } from './alert-callback.types';
 
 export type { AlertTypeKey } from './alert-callback.types';
@@ -59,6 +60,20 @@ export type AlertCallbackAction =
   | { kind: 'alert-delete'; alertId: string }
   | { kind: 'alert-delete-confirm'; alertId: string };
 
+/**
+ * Phase 5 — content management actions.
+ *
+ * They are *not* protected by the callback payload: the payload only carries an internal content id,
+ * and authorisation is resolved server-side from the platform identity against
+ * `CHANNEL_ADMIN_USER_IDS` (§22). A forwarded or modified button therefore cannot grant access.
+ */
+export type ContentCallbackAction =
+  | { kind: 'content-list' }
+  | { kind: 'content-view'; contentId: string }
+  | { kind: 'content-approve'; contentId: string }
+  | { kind: 'content-cancel'; contentId: string }
+  | { kind: 'content-publish'; contentId: string };
+
 export type CallbackAction =
   | { kind: 'menu' }
   | { kind: 'home' }
@@ -67,7 +82,8 @@ export type CallbackAction =
   | { kind: 'screen'; screen: ScreenKey }
   | { kind: 'manage-favorites' }
   | { kind: 'favorite'; op: 'add' | 'remove'; symbol: string }
-  | AlertCallbackAction;
+  | AlertCallbackAction
+  | ContentCallbackAction;
 
 /** Symbols are uppercase registry ids; anything else is rejected before touching the store. */
 const SYMBOL_PATTERN = /^[A-Z0-9_]{1,32}$/;
@@ -150,6 +166,41 @@ export function callbackDataForAlertDeleteConfirm(alertId: string): string {
   return `${CALLBACK_VERSION}:alert:delok:${alertId}`;
 }
 
+export function callbackDataForContentList(): string {
+  return `${CALLBACK_VERSION}:c:list`;
+}
+
+export function callbackDataForContentView(contentId: string): string {
+  return `${CALLBACK_VERSION}:c:view:${contentId}`;
+}
+
+export function callbackDataForContentAction(
+  op: 'apr' | 'can' | 'pub',
+  contentId: string,
+): string {
+  return `${CALLBACK_VERSION}:c:${op}:${contentId}`;
+}
+
+/** Content ids are generated internally (`cnt_…`); this is the shape a callback may carry. */
+export function isSafeContentId(value: string): boolean {
+  return isSafeChannelId(value);
+}
+
+const CONTENT_ACTION_KINDS: readonly ContentCallbackAction['kind'][] = [
+  'content-list',
+  'content-view',
+  'content-approve',
+  'content-cancel',
+  'content-publish',
+];
+
+/** Narrow a parsed callback to a content-management action (used by the router's dispatch). */
+export function isContentAction(
+  action: CallbackAction,
+): action is ContentCallbackAction {
+  return (CONTENT_ACTION_KINDS as readonly string[]).includes(action.kind);
+}
+
 /** Alert ids are generated internally; this is the shape a callback may carry. */
 const ALERT_ID_PATTERN = /^alr_[a-z0-9_]{1,40}$/;
 
@@ -192,6 +243,41 @@ export function isSafeSymbol(value: string): boolean {
  * version — the caller answers with a safe "this option is no longer valid" screen instead of
  * crashing (§40).
  */
+/**
+ * Content-management actions. The payload carries an internal id only; the id shape is validated
+ * here so a malformed button can never reach the store.
+ */
+function parseContentAction(tail: readonly string[]): CallbackAction | null {
+  const [head, ...rest] = tail;
+
+  if (head === 'list') {
+    return rest.length === 0 ? { kind: 'content-list' } : null;
+  }
+
+  const [contentId, ...extra] = rest;
+
+  if (
+    extra.length > 0 ||
+    contentId === undefined ||
+    !isSafeContentId(contentId)
+  ) {
+    return null;
+  }
+
+  switch (head) {
+    case 'view':
+      return { kind: 'content-view', contentId };
+    case 'apr':
+      return { kind: 'content-approve', contentId };
+    case 'can':
+      return { kind: 'content-cancel', contentId };
+    case 'pub':
+      return { kind: 'content-publish', contentId };
+    default:
+      return null;
+  }
+}
+
 /**
  * Alert actions. Every payload is validated here (shape + symbol/id format) before it can reach
  * the domain layer: a modified button can never address another user's alert, because ownership
@@ -293,6 +379,9 @@ export function parseCallbackData(
     }
     case 'alert': {
       return parseAlertAction(tail);
+    }
+    case 'c': {
+      return parseContentAction(tail);
     }
     case 'fav': {
       const [op, ...extra] = tail;

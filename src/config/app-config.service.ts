@@ -3,7 +3,12 @@ import { ConfigService } from '@nestjs/config';
 
 import { isMoneyUnit, MoneyUnit } from '../common/money';
 import { buildSymbolRegistry, SymbolDefinition } from '../market/symbols';
-import { parseSymbolUnits, parseThresholdOverrides } from './env.validation';
+import {
+  parseAdminUserIds,
+  parseMovementThresholdOverrides,
+  parseSymbolUnits,
+  parseThresholdOverrides,
+} from './env.validation';
 
 export interface PlatformCredentials {
   botToken: string;
@@ -90,6 +95,108 @@ export class AppConfigService {
     const trimmed = String(value).trim();
 
     return trimmed === '' ? null : trimmed;
+  }
+
+  // --- Phase 5: Channel Engine ----------------------------------------------
+
+  /** Where content items, publication jobs and deliveries are persisted (`null` disables it). */
+  get channelDataFile(): string | null {
+    return this.optionalPath('CHANNEL_DATA_FILE');
+  }
+
+  /** Platform user ids allowed to manage editorial content (empty = admin surface disabled). */
+  get channelAdminUserIds(): readonly string[] {
+    return parseAdminUserIds(
+      this.configService.get<string>('CHANNEL_ADMIN_USER_IDS'),
+    );
+  }
+
+  /** Longest editorial body an admin may submit (registry limits apply on top). */
+  get channelMaxContentChars(): number {
+    return this.readInteger('CHANNEL_MAX_CONTENT_CHARS', 3_000);
+  }
+
+  /** Longest text that may be attached to a photo (platform caption limit). */
+  get channelMediaCaptionLimit(): number {
+    return this.readInteger('CHANNEL_MEDIA_CAPTION_LIMIT', 1_000);
+  }
+
+  /** Maximum number of publication jobs kept in the history document. */
+  get channelHistoryLimit(): number {
+    return this.readInteger('CHANNEL_HISTORY_LIMIT', 500);
+  }
+
+  /** Total delivery attempts per destination (1 = no retry at all). */
+  get channelPublicationMaxAttempts(): number {
+    return this.readInteger('CHANNEL_PUBLICATION_MAX_ATTEMPTS', 3);
+  }
+
+  /** Base delay between two delivery attempts (exponential backoff). */
+  get channelPublicationRetryDelayMs(): number {
+    return this.readNonNegativeInteger(
+      'CHANNEL_PUBLICATION_RETRY_DELAY_MS',
+      5_000,
+    );
+  }
+
+  /** A scheduled publication older than this grace is skipped rather than published late. */
+  get channelMissedJobGraceMs(): number {
+    return (
+      this.readNonNegativeInteger('CHANNEL_MISSED_JOB_GRACE_MINUTES', 30) *
+      60_000
+    );
+  }
+
+  /** Default movement threshold in percent; `0` disables movement publication entirely. */
+  get channelMovementThresholdPercent(): number {
+    return this.readNonNegativeNumber('CHANNEL_MOVEMENT_THRESHOLD_PERCENT', 1);
+  }
+
+  /** Per-symbol movement thresholds (a symbol mapped to `0` never publishes a movement). */
+  get channelMovementThresholdOverrides(): Record<string, number> {
+    return parseMovementThresholdOverrides(
+      this.configService.get<string>('CHANNEL_MOVEMENT_THRESHOLD_OVERRIDES'),
+    );
+  }
+
+  /** Minimum time between two movement publications for the same symbol. */
+  get channelMovementCooldownMinutes(): number {
+    return this.readNonNegativeInteger(
+      'CHANNEL_MOVEMENT_COOLDOWN_MINUTES',
+      120,
+    );
+  }
+
+  /** Scheduled daily high/low publication. */
+  get channelDailyRangeEnabled(): boolean {
+    return this.readBooleanFlag('CHANNEL_DAILY_RANGE_ENABLED', false);
+  }
+
+  /** `HH:MM` (Asia/Tehran) at which the daily range is published. */
+  get channelDailyRangeTime(): string {
+    return this.readString('CHANNEL_DAILY_RANGE_TIME', '21:00');
+  }
+
+  /** Event-driven high/low messages when a new daily extreme is established. */
+  get channelDailyRangeEventsEnabled(): boolean {
+    return this.readBooleanFlag('CHANNEL_DAILY_RANGE_EVENTS_ENABLED', false);
+  }
+
+  get channelDailyRangeCooldownMinutes(): number {
+    return this.readNonNegativeInteger(
+      'CHANNEL_DAILY_RANGE_COOLDOWN_MINUTES',
+      90,
+    );
+  }
+
+  /** Scheduled daily market report. */
+  get channelDailyReportEnabled(): boolean {
+    return this.readBooleanFlag('CHANNEL_DAILY_REPORT_ENABLED', false);
+  }
+
+  /** `HH:MM` (Asia/Tehran) at which the daily report is published. */
+  get channelDailyReportTime(): string {
+    return this.readString('CHANNEL_DAILY_REPORT_TIME', '23:00');
   }
 
   // --- Phase 2: bot UX -------------------------------------------------------
@@ -273,6 +380,35 @@ export class AppConfigService {
     const value = Number(raw);
 
     return Number.isInteger(value) && value >= 0 ? value : fallback;
+  }
+
+  /** Like {@link readNumber}, but `0` is a valid configured value (documented "disabled"). */
+  private readNonNegativeNumber(key: string, fallback: number): number {
+    const raw = this.configService.get<string>(key);
+    const value = Number(raw);
+
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  }
+
+  private readBooleanFlag(key: string, fallback: boolean): boolean {
+    const raw = this.configService.get<string>(key);
+
+    if (raw === undefined || raw === null || String(raw).trim() === '') {
+      return fallback;
+    }
+
+    const normalized = String(raw).trim().toLowerCase();
+
+    if (normalized === 'true') {
+      return true;
+    }
+
+    if (normalized === 'false') {
+      return false;
+    }
+
+    // Validation rejects other spellings at startup; an unexpected value keeps the safe default.
+    return fallback;
   }
 
   private readNumber(key: string, fallback: number): number {

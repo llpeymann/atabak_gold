@@ -32,6 +32,21 @@ export function tehranDayKey(date: Date): string {
   return dayKeyFormatter.format(date);
 }
 
+const hourMinuteFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: TEHRAN_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+/**
+ * `HH:MM` of the Tehran wall clock — used to compare a configured publication time
+ * (`CHANNEL_DAILY_REPORT_TIME`) with the current moment without depending on the server's TZ.
+ */
+export function tehranHourMinute(date: Date): string {
+  return hourMinuteFormatter.format(date);
+}
+
 /** Persian date for display, e.g. `۱۴۰۵/۰۷/۰۸`. */
 export function tehranDateFa(date: Date): string {
   return dateFormatterFa.format(date);

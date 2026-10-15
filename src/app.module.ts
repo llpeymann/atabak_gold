@@ -15,6 +15,12 @@ import { PriceMessageBuilder } from './bot/price-message.builder';
 import { BotUxService } from './bot/ux/bot-ux.service';
 import { MarketViewService } from './bot/ux/market-view.service';
 import { UxEventLogService } from './bot/ux/ux-event-log.service';
+import { ChannelEngineService } from './channel/channel-engine.service';
+import { ChannelPolicyService } from './channel/channel-policy.service';
+import { ChannelPublisher } from './channel/channel-publisher.service';
+import { ContentAdminService } from './bot/content/content-admin.service';
+import { ContentService } from './channel/content.service';
+import { PublicationStore } from './channel/publication.store';
 import { AppConfigService } from './config/app-config.service';
 import { MarketIntelligenceService } from './intelligence/market-intelligence.service';
 import { validateEnvironment } from './config/env.validation';
@@ -79,6 +85,15 @@ import { UserStore } from './users/user.store';
     AlertService,
     AlertNotificationService,
     AlertEngineService,
+    // Phase 5 — Channel Engine: content, publication jobs, per-destination delivery, scheduling.
+    // Registered here (the project keeps one flat module tree) so the engine and every older phase
+    // share exactly one instance of the market state, the intelligence service and the transport.
+    PublicationStore,
+    ChannelPolicyService,
+    ChannelPublisher,
+    ChannelEngineService,
+    ContentService,
+    ContentAdminService,
   ],
 })
 export class AppModule {}

@@ -1,6 +1,10 @@
 import { AlertService } from '../../alerts/alert.service';
 import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
+import { ContentAdminService } from '../content/content-admin.service';
+import { ContentService } from '../../channel/content.service';
+import { PublicationStore } from '../../channel/publication.store';
+import { ChannelEngineService } from '../../channel/channel-engine.service';
 import { callbackDataForScreen } from './callback-data';
 import { MarketIntelligenceService } from '../../intelligence/market-intelligence.service';
 import { MarketViewService } from './market-view.service';
@@ -96,6 +100,11 @@ describe('market flow (integration)', () => {
       users,
       events,
       alerts,
+      new ContentAdminService(
+        config,
+        new ContentService(config, new PublicationStore(config)),
+        {} as unknown as ChannelEngineService,
+      ),
     );
 
     // `priceService` only exists to prove it is never used.

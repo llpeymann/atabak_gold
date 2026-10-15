@@ -1,15 +1,13 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 
-import { BaleService } from '../bale/bale.service';
-import { DeliveryResult, summarizeDelivery } from '../bale/delivery-result';
+import { ChannelEngineService } from '../channel/channel-engine.service';
+import { PublicationOutcome } from '../channel/channel.types';
 import { describeError } from '../common/log-safety';
 import { TEHRAN_TIME_ZONE } from '../common/tehran-time';
 import { MarketEngineService } from '../market/market-engine.service';
 import { PublishableMarketUpdate } from '../market/market.types';
-import { PosterService } from '../poster/poster.service';
 import { PriceService } from '../price/price.service';
-import { PriceMessageBuilder } from './price-message.builder';
 
 /**
  * Scheduling and publication orchestration.
@@ -20,27 +18,30 @@ import { PriceMessageBuilder } from './price-message.builder';
  *
  * Phase 0 guarantees kept: Asia/Tehran schedules, one in-flight publication at a time,
  * truthful delivery reporting, no publication after a failed fetch.
+ *
+ * Phase 5: this service no longer renders or sends anything itself. It keeps the market pipeline and
+ * the three original schedules, and hands every publication to the Channel Engine, which owns
+ * identity, approval, duplicate prevention, retries and delivery records (§9–§14).
  */
 @Injectable()
 export class BotService implements OnModuleInit {
   private readonly logger = new Logger(BotService.name);
 
-  /** Name of the publication currently in flight, or `null`. */
-  private publishing: string | null = null;
-
   constructor(
     private readonly priceService: PriceService,
     private readonly marketEngine: MarketEngineService,
-    private readonly baleService: BaleService,
-    private readonly posterService: PosterService,
-    private readonly priceMessageBuilder: PriceMessageBuilder,
+    private readonly channelEngine: ChannelEngineService,
   ) {}
 
   onModuleInit(): void {
+    const destinations = this.channelEngine.destinations
+      .map((destination) => destination.platform)
+      .join(', ');
+
     this.logger.log(
       `Scheduled jobs (${TEHRAN_TIME_ZONE}): price update — every 30 min 08:00→21:30; ` +
         'daily closing price — 22:00; poster report — 12:15, 16:15, 19:15 ' +
-        `(delivery targets: ${this.baleService.platforms.join(', ') || 'none'})`,
+        `(channel destinations: ${destinations || 'none'})`,
     );
   }
 
@@ -50,7 +51,7 @@ export class BotService implements OnModuleInit {
     timeZone: TEHRAN_TIME_ZONE,
   })
   async handleHalfHourlyPriceUpdate(): Promise<void> {
-    await this.runPublication('Price update (half-hourly)', 'channel-message');
+    await this.runCycle('Price update (half-hourly)', 'full');
   }
 
   /** Last price message of the day at 22:00 (Asia/Tehran). */
@@ -59,10 +60,7 @@ export class BotService implements OnModuleInit {
     timeZone: TEHRAN_TIME_ZONE,
   })
   async handleDailyClosingPriceUpdate(): Promise<void> {
-    await this.runPublication(
-      'Price update (daily closing)',
-      'channel-message',
-    );
+    await this.runCycle('Price update (daily closing)', 'full');
   }
 
   /**
@@ -74,32 +72,26 @@ export class BotService implements OnModuleInit {
     timeZone: TEHRAN_TIME_ZONE,
   })
   async handlePosterReport(): Promise<void> {
-    await this.runPublication('Poster report', 'poster');
+    await this.runCycle('Poster report', 'poster');
   }
 
   /**
    * Runs the reliability pipeline and publishes only an approved update.
-   * `source: 'channel-message' | 'poster'` decides how the approved data is rendered — the
-   * validation path is identical for both.
+   *
+   * `variant: 'full' | 'poster'` decides how the approved data is rendered — the validation path is
+   * identical for both, and both go through the same Channel Engine job identity, so the same minute
+   * can never be published twice (§12).
    */
-  private async runPublication(
+  private async runCycle(
     job: string,
-    renderer: 'channel-message' | 'poster',
+    variant: 'full' | 'poster',
   ): Promise<void> {
-    if (this.publishing !== null) {
-      this.logger.warn(
-        `Skipping "${job}": "${this.publishing}" is still in progress — no duplicate publication.`,
-      );
-      return;
-    }
-
-    this.publishing = job;
-
     try {
       const fetch = await this.priceService.fetchRawPayload();
+      const now = new Date(fetch.receivedAt);
       const { update, staleSymbols } = await this.marketEngine.evaluateCycle(
         fetch.payload,
-        new Date(fetch.receivedAt),
+        now,
       );
 
       this.reportCycle(job, update, staleSymbols.length);
@@ -112,19 +104,45 @@ export class BotService implements OnModuleInit {
         return;
       }
 
-      const text =
-        renderer === 'poster'
-          ? this.posterService.generatePricePoster(update)
-          : this.priceMessageBuilder.build(update);
+      const outcome = await this.channelEngine.publishPriceUpdate(
+        update,
+        variant,
+        now,
+      );
+      this.reportOutcome(job, outcome);
 
-      const results = await this.baleService.sendMessage(text);
-      this.reportDelivery(job, results);
+      // Movement/range events reuse this cycle: no additional provider call is made, and the
+      // policy decides whether a fresh threshold crossing really is news (§17, §18).
+      await this.publishMarketEvents(now);
     } catch (error) {
       // Fetch failures, schema failures and unexpected errors land here: no publication, no
       // success log, market state untouched (a rejected price never reaches it).
       this.logger.error(`❌ ${job} failed: ${describeError(error)}`);
-    } finally {
-      this.publishing = null;
+    }
+  }
+
+  /**
+   * Publish movement and daily-range events for the cycle that was just evaluated.
+   * A failure here is isolated from the price message: the price publication is already recorded.
+   */
+  private async publishMarketEvents(now: Date): Promise<void> {
+    try {
+      for (const outcome of await this.channelEngine.publishMovementEvents(
+        now,
+      )) {
+        this.reportOutcome('Market movement', outcome);
+      }
+
+      if (this.channelEngine.rangeEventsEnabled) {
+        this.reportOutcome(
+          'Daily range event',
+          await this.channelEngine.publishDailyRange(now, 'event'),
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Market event publication failed: ${describeError(error)}`,
+      );
     }
   }
 
@@ -160,32 +178,56 @@ export class BotService implements OnModuleInit {
     );
   }
 
-  private reportDelivery(
-    job: string,
-    results: readonly DeliveryResult[],
-  ): void {
-    const summary = summarizeDelivery(results);
+  /** Delivery is reported per destination — a Telegram failure never hides a Bale success (§8). */
+  private reportOutcome(job: string, outcome: PublicationOutcome): void {
+    if (outcome.deliveries.length === 0) {
+      const reason = outcome.skipReason ?? outcome.status;
+      const level = outcome.status === 'SKIPPED' ? 'warn' : 'error';
 
-    if (summary.allFailed) {
-      const details = results
-        .map(
-          (result) => `${result.platform}: ${result.error ?? 'unknown error'}`,
-        )
-        .join(' | ');
+      if (level === 'warn') {
+        this.logger.warn(`⚠️ ${job}: not published — ${reason}.`);
+      } else {
+        this.logger.error(`❌ ${job}: nothing was delivered — ${reason}.`);
+      }
+      return;
+    }
+
+    const sent = outcome.deliveries.filter(
+      (delivery) => delivery.status === 'SENT',
+    );
+    const failed = outcome.deliveries.filter(
+      (delivery) => delivery.status !== 'SENT',
+    );
+
+    if (failed.length === 0) {
+      this.logger.log(
+        `✅ ${job}: delivered to ${sent
+          .map(
+            (delivery) =>
+              `${delivery.platform} (#${delivery.externalMessageId ?? '?'})`,
+          )
+          .join(', ')}.`,
+      );
+      return;
+    }
+
+    const details = failed
+      .map(
+        (delivery) =>
+          `${delivery.platform}: ${delivery.status} — ${delivery.lastError ?? 'unknown error'}`,
+      )
+      .join(' | ');
+
+    if (sent.length === 0) {
       this.logger.error(
-        `❌ ${job}: delivery FAILED on every platform — ${details}`,
+        `❌ ${job}: delivery FAILED on every destination — ${details}`,
       );
       return;
     }
 
-    if (summary.failed.length > 0) {
-      this.logger.warn(
-        `⚠️ ${job}: delivered to ${summary.succeeded.join(', ')}, ` +
-          `FAILED on ${summary.failed.join(', ')}`,
-      );
-      return;
-    }
-
-    this.logger.log(`✅ ${job}: delivered to ${summary.succeeded.join(', ')}.`);
+    this.logger.warn(
+      `⚠️ ${job}: delivered to ${sent.map((delivery) => delivery.platform).join(', ')}, ` +
+        `FAILED on ${details}`,
+    );
   }
 }

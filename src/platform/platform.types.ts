@@ -82,6 +82,28 @@ export interface PlatformCapabilities {
   supportsCallbackAnswer: boolean;
 }
 
+/**
+ * Why a publishing call failed (Phase 5 §13/§14).
+ *
+ * `RETRYABLE` — the platform explicitly refused the attempt (HTTP 5xx/429): retrying cannot
+ * duplicate a message that was never accepted.
+ * `PERMANENT` — the request itself is wrong (4xx / API `ok:false`): retrying would fail again.
+ * `AMBIGUOUS` — there was no answer at all (timeout, socket reset): the message *may* have been
+ * delivered, so callers must not blindly retry it.
+ */
+export type PlatformFailureKind = 'RETRYABLE' | 'PERMANENT' | 'AMBIGUOUS';
+
+/** Result of a channel publication call, with the failure classified (§14). */
+export interface PlatformPublishResult {
+  platform: Platform;
+  chatId: string;
+  success: boolean;
+  messageId: number | null;
+  failureKind: PlatformFailureKind | null;
+  /** Sanitized failure description (secrets redacted). `null` on success. */
+  error: string | null;
+}
+
 export interface PlatformSendResult {
   platform: Platform;
   chatId: string;

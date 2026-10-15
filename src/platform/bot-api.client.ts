@@ -5,10 +5,12 @@ import { firstValueFrom } from 'rxjs';
 
 import { AppConfigService } from '../config/app-config.service';
 import { describeError, redactSecrets, truncate } from '../common/log-safety';
+import { PlatformFailureKind } from './platform.types';
 import {
   isPlatform,
   InboundUpdate,
   Platform,
+  PlatformPublishResult,
   PlatformSendResult,
   PollResult,
 } from './platform.types';
@@ -114,6 +116,98 @@ export class BotApiClient {
     }
   }
 
+  /**
+   * Publish text to a channel (Phase 5). Unlike {@link sendMessage} (a user-facing screen) this
+   * returns the *classified* failure, because the Channel Engine's retry policy depends on it
+   * (§13, §14) — a timeout must never be retried blindly.
+   */
+  async publishText(
+    platform: Platform,
+    chatId: string,
+    text: string,
+  ): Promise<PlatformPublishResult> {
+    const response = await this.call(platform, 'sendMessage', {
+      chat_id: chatId,
+      text,
+      parse_mode: 'HTML',
+    });
+
+    return this.toPublishResult(platform, chatId, response);
+  }
+
+  /**
+   * Publish a photo with an optional caption. Both supported platforms expose the
+   * Telegram-compatible `sendPhoto` method, and a failure is classified exactly like a text send
+   * so an unsupported media type can be handled safely by the caller (§5.5, §14).
+   */
+  async publishPhoto(
+    platform: Platform,
+    chatId: string,
+    photoUrl: string,
+    caption?: string,
+  ): Promise<PlatformPublishResult> {
+    const response = await this.call(platform, 'sendPhoto', {
+      chat_id: chatId,
+      photo: photoUrl,
+      ...(caption ? { caption, parse_mode: 'HTML' } : {}),
+    });
+
+    return this.toPublishResult(platform, chatId, response);
+  }
+
+  private toPublishResult(
+    platform: Platform,
+    chatId: string,
+    response: {
+      ok: boolean;
+      result: unknown;
+      error: string;
+      failureKind: PlatformFailureKind | null;
+    },
+  ): PlatformPublishResult {
+    if (!response.ok) {
+      this.logger.error(
+        `❌ Channel publish failed on ${platform} (chat ${chatId}): ${response.error} ` +
+          `[${response.failureKind ?? 'AMBIGUOUS'}]`,
+      );
+
+      return {
+        platform,
+        chatId,
+        success: false,
+        messageId: null,
+        failureKind: response.failureKind ?? 'AMBIGUOUS',
+        error: response.error,
+      };
+    }
+
+    return {
+      platform,
+      chatId,
+      success: true,
+      messageId: this.readMessageId(response.result),
+      failureKind: null,
+      error: null,
+    };
+  }
+
+  /**
+   * Classify a transport failure: an HTTP status means the platform *answered* (so the request
+   * was refused → retryable for 5xx/429, permanent for other 4xx), while having no response at all
+   * is ambiguous — the call may or may not have been delivered.
+   */
+  private classifyFailure(error: unknown): PlatformFailureKind {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+
+      if (status !== undefined) {
+        return status >= 500 || status === 429 ? 'RETRYABLE' : 'PERMANENT';
+      }
+    }
+
+    return 'AMBIGUOUS';
+  }
+
   // --- internals -------------------------------------------------------------
 
   private async call(
@@ -121,14 +215,21 @@ export class BotApiClient {
     method: string,
     body: Record<string, unknown>,
     signal?: AbortSignal,
-  ): Promise<{ ok: boolean; result: unknown; error: string }> {
+  ): Promise<{
+    ok: boolean;
+    result: unknown;
+    error: string;
+    failureKind: PlatformFailureKind | null;
+  }> {
     const token = this.tokenFor(platform);
 
     if (!token) {
+      // Misconfiguration: no attempt was made, so retrying cannot help.
       return {
         ok: false,
         result: null,
         error: `Platform ${platform} is not configured (missing bot token)`,
+        failureKind: 'PERMANENT',
       };
     }
 
@@ -146,6 +247,7 @@ export class BotApiClient {
         { ok?: boolean; result?: unknown; description?: string } | undefined;
 
       if (data?.ok === false) {
+        // The platform answered: the request was rejected, so the message was not accepted.
         return {
           ok: false,
           result: null,
@@ -153,12 +255,23 @@ export class BotApiClient {
             platform,
             `HTTP 200 / ok=false — ${data.description ?? 'unknown API error'}`,
           ),
+          failureKind: 'PERMANENT',
         };
       }
 
-      return { ok: true, result: data?.result ?? null, error: '' };
+      return {
+        ok: true,
+        result: data?.result ?? null,
+        error: '',
+        failureKind: null,
+      };
     } catch (error) {
-      return { ok: false, result: null, error: this.describe(platform, error) };
+      return {
+        ok: false,
+        result: null,
+        error: this.describe(platform, error),
+        failureKind: this.classifyFailure(error),
+      };
     }
   }
 

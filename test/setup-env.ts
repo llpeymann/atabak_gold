@@ -26,7 +26,16 @@ if (!process.env.USER_DATA_FILE) {
   process.env.USER_DATA_FILE = join(directory, 'users.json');
   process.env.MARKET_STATE_FILE = join(directory, 'market-state.json');
   process.env.ALERTS_DATA_FILE = join(directory, 'alerts.json');
+  // Phase 5: publication history lives in the same throw-away directory, and the admin surface is
+  // enabled only for a synthetic test admin id.
+  process.env.CHANNEL_DATA_FILE = join(directory, 'channel.json');
 }
+
+// Phase 5: publication retries must not slow the suite down (their *count* is what is asserted).
+process.env.CHANNEL_PUBLICATION_RETRY_DELAY_MS =
+  process.env.CHANNEL_PUBLICATION_RETRY_DELAY_MS ?? '0';
+process.env.CHANNEL_ADMIN_USER_IDS =
+  process.env.CHANNEL_ADMIN_USER_IDS ?? 'bale:e2e-admin';
 
 // Phase 3: notify retries must be immediate in tests (the retry *count* is what is asserted).
 process.env.ALERT_NOTIFICATION_RETRY_DELAY_MS =

@@ -10,14 +10,29 @@ import { AlertNotificationService } from '../alerts/alert-notification.service';
 import { AlertService } from '../alerts/alert.service';
 import { AlertStore } from '../alerts/alert.store';
 import { BotUxService } from '../bot/ux/bot-ux.service';
+import { PriceMessageBuilder } from '../bot/price-message.builder';
+import { ContentAdminService } from '../bot/content/content-admin.service';
+import { ChannelEngineService } from '../channel/channel-engine.service';
+import { ChannelPolicyService } from '../channel/channel-policy.service';
+import { ChannelPublisher } from '../channel/channel-publisher.service';
+import { ContentService } from '../channel/content.service';
+import { PublicationStore } from '../channel/publication.store';
+import { PosterService } from '../poster/poster.service';
 import { MarketViewService } from '../bot/ux/market-view.service';
 import { MarketIntelligenceService } from '../intelligence/market-intelligence.service';
+import {
+  MarketIntelligenceFreshness,
+  MarketIntelligenceSnapshot,
+  MarketSymbolSnapshot,
+} from '../intelligence/market-intelligence.types';
 import { UxEventLogService } from '../bot/ux/ux-event-log.service';
 import { BotApiClient } from '../platform/bot-api.client';
 import { PlatformRegistry } from '../platform/platform-registry.service';
 import {
   InboundUpdate,
   Platform,
+  PlatformFailureKind,
+  PlatformPublishResult,
   PlatformSendResult,
 } from '../platform/platform.types';
 import { UserService } from '../users/user.service';
@@ -60,6 +75,22 @@ export const DEFAULT_TEST_ENV: EnvMap = {
   BOT_POLLING_ENABLED: 'false',
   BOT_POLL_TIMEOUT_SECONDS: '0',
   BOT_POLL_RETRY_DELAY_MS: '1',
+  // --- Phase 5 (in-memory channel state, no admin surface) ---
+  CHANNEL_DATA_FILE: '',
+  CHANNEL_ADMIN_USER_IDS: '',
+  CHANNEL_HISTORY_LIMIT: '500',
+  CHANNEL_PUBLICATION_MAX_ATTEMPTS: '3',
+  CHANNEL_PUBLICATION_RETRY_DELAY_MS: '1',
+  CHANNEL_MISSED_JOB_GRACE_MINUTES: '30',
+  CHANNEL_MOVEMENT_THRESHOLD_PERCENT: '1',
+  CHANNEL_MOVEMENT_THRESHOLD_OVERRIDES: '',
+  CHANNEL_MOVEMENT_COOLDOWN_MINUTES: '120',
+  CHANNEL_DAILY_RANGE_ENABLED: 'false',
+  CHANNEL_DAILY_RANGE_TIME: '21:00',
+  CHANNEL_DAILY_RANGE_EVENTS_ENABLED: 'false',
+  CHANNEL_DAILY_RANGE_COOLDOWN_MINUTES: '90',
+  CHANNEL_DAILY_REPORT_ENABLED: 'false',
+  CHANNEL_DAILY_REPORT_TIME: '23:00',
 };
 
 export function createConfigService(overrides: EnvMap = {}): ConfigService {
@@ -205,7 +236,7 @@ export interface WireKeyboard {
 
 /** One call the UX layer made through a platform adapter. */
 export interface PlatformCall {
-  kind: 'send' | 'edit' | 'ack' | 'poll';
+  kind: 'send' | 'edit' | 'ack' | 'poll' | 'publish';
   platform: Platform;
   chatId: string;
   text?: string;
@@ -214,8 +245,12 @@ export interface PlatformCall {
   messageId?: number | null;
   callbackId?: string;
   alertText?: string;
-  /** Present for `send`/`edit`: whether the platform accepted the call. */
+  /** Present for `send`/`edit`/`publish`: whether the platform accepted the call. */
   success?: boolean;
+  /** Present for `publish`: how the platform failed, when it did (§14). */
+  failureKind?: PlatformFailureKind | null;
+  /** Present for a photo publication: the media url that was sent. */
+  media?: string | null;
 }
 
 /** Flatten the buttons of a rendered message (wire level: callback_data/url included). */
@@ -239,6 +274,8 @@ export interface PlatformHarness {
     sendMessage: jest.Mock;
     editMessageText: jest.Mock;
     answerCallbackQuery: jest.Mock;
+    publishText: jest.Mock;
+    publishPhoto: jest.Mock;
   };
   calls: PlatformCall[];
   /** Queue inbound updates returned by the next `getUpdates` round. */
@@ -252,6 +289,17 @@ export interface PlatformHarness {
   failSends: (failures: number) => void;
   /** Reject the next `failures` sends with a thrown transport error instead of a failed result. */
   throwSends: (failures: number) => void;
+  /**
+   * Fail the next `times` channel publications with a classified failure (§13, §14).
+   * `platform` scopes the failure to one destination, so partial delivery can be exercised.
+   */
+  failPublish: (
+    kind: PlatformFailureKind,
+    times?: number,
+    platform?: Platform,
+  ) => void;
+  /** Fail the next `times` photo publications (media failure is tracked separately, §14). */
+  failMedia: (kind: PlatformFailureKind, times?: number) => void;
 }
 
 /**
@@ -269,6 +317,12 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
   let editsFail = false;
   let sendsToFail = 0;
   let sendsToThrow = 0;
+  let publishFailure: PlatformFailureKind | null = null;
+  let publishFailuresLeft = 0;
+  let publishFailurePlatform: Platform | null = null;
+  let mediaFailure: PlatformFailureKind | null = null;
+  let mediaFailuresLeft = 0;
+  let nextPublishId = 5000;
 
   const getUpdates = jest.fn((platform: Platform, offset: number) => {
     calls.push({ kind: 'poll', platform, chatId: '', messageId: offset });
@@ -370,6 +424,94 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
     },
   );
 
+  /**
+   * Phase 5 publication double (§27.2): the *classified* failure is returned exactly like the real
+   * client does, so retry/ambiguous behaviour can be tested without any network access.
+   */
+  const publish = (
+    kind: 'text' | 'photo',
+    platform: Platform,
+    chatId: string,
+    text: string,
+    photoUrl?: string,
+  ): Promise<PlatformPublishResult> => {
+    const platformScoped =
+      kind === 'photo' ||
+      publishFailurePlatform === null ||
+      publishFailurePlatform === platform;
+    const failure =
+      kind === 'photo' ? mediaFailure : platformScoped ? publishFailure : null;
+    const failuresLeft =
+      kind === 'photo' ? mediaFailuresLeft : publishFailuresLeft;
+
+    if (failure !== null && failuresLeft > 0) {
+      if (kind === 'photo') {
+        mediaFailuresLeft -= 1;
+      } else if (platformScoped) {
+        publishFailuresLeft -= 1;
+      }
+
+      calls.push({
+        kind: 'publish',
+        platform,
+        chatId,
+        text,
+        markup: null,
+        messageId: null,
+        success: false,
+        failureKind: failure,
+        media: kind === 'photo' ? (photoUrl ?? null) : null,
+      });
+
+      return Promise.resolve({
+        platform,
+        chatId,
+        success: false,
+        messageId: null,
+        failureKind: failure,
+        error:
+          failure === 'AMBIGUOUS'
+            ? 'timeout of 2000ms exceeded'
+            : failure === 'RETRYABLE'
+              ? 'HTTP 502 — Bad Gateway'
+              : 'HTTP 400 — Bad Request: chat not found',
+      });
+    }
+
+    const id = ++nextPublishId;
+
+    calls.push({
+      kind: 'publish',
+      platform,
+      chatId,
+      text,
+      markup: null,
+      messageId: id,
+      success: true,
+      failureKind: null,
+      media: kind === 'photo' ? (photoUrl ?? null) : null,
+    });
+
+    return Promise.resolve({
+      platform,
+      chatId,
+      success: true,
+      messageId: id,
+      failureKind: null,
+      error: null,
+    });
+  };
+
+  const publishText = jest.fn(
+    (platform: Platform, chatId: string, text: string) =>
+      publish('text', platform, chatId, text),
+  );
+
+  const publishPhoto = jest.fn(
+    (platform: Platform, chatId: string, photoUrl: string, caption?: string) =>
+      publish('photo', platform, chatId, caption ?? '', photoUrl),
+  );
+
   const answerCallbackQuery = jest.fn(
     (platform: Platform, callbackId: string, text?: string) => {
       calls.push({
@@ -388,12 +530,34 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
     sendMessage,
     editMessageText,
     answerCallbackQuery,
+    publishText,
+    publishPhoto,
   } as unknown as BotApiClient;
 
   return {
     config,
     registry: new PlatformRegistry(config, client),
-    client: { getUpdates, sendMessage, editMessageText, answerCallbackQuery },
+    client: {
+      getUpdates,
+      sendMessage,
+      editMessageText,
+      answerCallbackQuery,
+      publishText,
+      publishPhoto,
+    },
+    failPublish: (
+      kind: PlatformFailureKind,
+      times = 1,
+      platform?: Platform,
+    ) => {
+      publishFailure = kind;
+      publishFailuresLeft = times;
+      publishFailurePlatform = platform ?? null;
+    },
+    failMedia: (kind: PlatformFailureKind, times = 1) => {
+      mediaFailure = kind;
+      mediaFailuresLeft = times;
+    },
     calls,
     queueUpdates: (updates) => {
       queued = [...queued, ...updates];
@@ -410,6 +574,223 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
   };
 }
 
+/** One symbol of a hand-built Phase 4 snapshot (test-only). */
+export interface SnapshotSymbolSeed {
+  symbol: string;
+  label?: string;
+  unit?: 'RIAL' | 'USD';
+  availability?: 'AVAILABLE' | 'STALE' | 'UNAVAILABLE';
+  freshness?: 'FRESH' | 'STALE' | null;
+  currentPrice?: number | null;
+  previousPrice?: number | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  dailyChangePercent?: number | null;
+  movementPercent?: number | null;
+  lastUpdatedAt?: string | null;
+}
+
+/**
+ * Build a Phase 4 snapshot for tests without involving Phase 1.
+ *
+ * When a value is not supplied it stays `null` (or `UNKNOWN`) — exactly the rule the real snapshot
+ * follows — so a test that forgets to provide data can never accidentally assert against a
+ * fabricated zero.
+ */
+export function makeSnapshot(
+  seeds: readonly SnapshotSymbolSeed[],
+  options: {
+    freshness?: MarketIntelligenceFreshness;
+    lastUpdate?: string | null;
+    now?: Date;
+  } = {},
+): MarketIntelligenceSnapshot {
+  const symbols: MarketSymbolSnapshot[] = seeds.map((seed) => {
+    const currentPrice = seed.currentPrice ?? null;
+    const previousPrice = seed.previousPrice ?? null;
+    const open = seed.open ?? null;
+    const movement =
+      currentPrice !== null && previousPrice !== null
+        ? currentPrice - previousPrice
+        : null;
+    const movementPercent =
+      movement !== null && previousPrice !== null && previousPrice !== 0
+        ? (movement / previousPrice) * 100
+        : null;
+    const dailyChange =
+      currentPrice !== null && open !== null ? currentPrice - open : null;
+    const dailyChangePercent =
+      dailyChange !== null && open !== null && open !== 0
+        ? (dailyChange / open) * 100
+        : null;
+    const direction = (
+      value: number | null,
+    ): 'UP' | 'DOWN' | 'UNCHANGED' | 'UNKNOWN' =>
+      value === null
+        ? 'UNKNOWN'
+        : value > 0
+          ? 'UP'
+          : value < 0
+            ? 'DOWN'
+            : 'UNCHANGED';
+
+    return {
+      symbol: seed.symbol,
+      label: seed.label ?? seed.symbol,
+      section: 'gold',
+      unit: seed.unit ?? 'RIAL',
+      availability: seed.availability ?? 'AVAILABLE',
+      freshness: seed.freshness === undefined ? 'FRESH' : seed.freshness,
+      currentPrice,
+      previousPrice,
+      open,
+      high: seed.high ?? null,
+      low: seed.low ?? null,
+      dailyChange,
+      dailyChangePercent:
+        seed.dailyChangePercent === undefined
+          ? dailyChangePercent
+          : seed.dailyChangePercent,
+      dailyDirection: direction(dailyChange),
+      movement,
+      movementPercent:
+        seed.movementPercent === undefined
+          ? movementPercent
+          : seed.movementPercent,
+      movementDirection: direction(movement),
+      lastUpdatedAt: seed.lastUpdatedAt ?? '2026-09-30T08:00:00.000Z',
+      ageMs: 0,
+    };
+  });
+
+  const increasing = symbols.filter(
+    (symbol) => symbol.dailyDirection === 'UP',
+  ).length;
+  const decreasing = symbols.filter(
+    (symbol) => symbol.dailyDirection === 'DOWN',
+  ).length;
+  const unchanged = symbols.filter(
+    (symbol) => symbol.dailyDirection === 'UNCHANGED',
+  ).length;
+  const unknown = symbols.length - increasing - decreasing - unchanged;
+
+  return {
+    generatedAt: (
+      options.now ?? new Date('2026-09-30T08:00:00.000Z')
+    ).toISOString(),
+    freshness: options.freshness ?? 'FRESH',
+    symbols,
+    summary: {
+      increasing,
+      decreasing,
+      unchanged,
+      unknown,
+      available: symbols.filter((symbol) => symbol.availability === 'AVAILABLE')
+        .length,
+      stale: symbols.filter((symbol) => symbol.availability === 'STALE').length,
+      unavailable: symbols.filter(
+        (symbol) => symbol.availability === 'UNAVAILABLE',
+      ).length,
+    },
+    hasData: currentPricesOf(symbols) > 0,
+    hasStale: symbols.some((symbol) => symbol.availability === 'STALE'),
+    lastUpdate: options.lastUpdate ?? '2026-09-30T08:00:00.000Z',
+  };
+}
+
+function currentPricesOf(symbols: readonly MarketSymbolSnapshot[]): number {
+  return symbols.filter((symbol) => symbol.currentPrice !== null).length;
+}
+
+/** A `MarketIntelligenceService` stand-in that returns one fixed snapshot. */
+export function createIntelligenceStub(
+  snapshot: MarketIntelligenceSnapshot | (() => MarketIntelligenceSnapshot),
+): MarketIntelligenceService {
+  const build = typeof snapshot === 'function' ? snapshot : () => snapshot;
+
+  return { build } as unknown as MarketIntelligenceService;
+}
+
+export interface ChannelHarness {
+  config: AppConfigService;
+  market: MarketHarness;
+  platform: PlatformHarness;
+  store: PublicationStore;
+  publisher: ChannelPublisher;
+  policy: ChannelPolicyService;
+  engine: ChannelEngineService;
+  content: ContentService;
+  contentAdmin: ContentAdminService;
+  /** Publication calls the publisher made, in order (per destination, §14). */
+  publishes: () => PlatformCall[];
+  /** Rendered platform calls (screens sent by the admin surface). */
+  messages: () => PlatformCall[];
+  load: () => Promise<void>;
+}
+
+/**
+ * Complete Phase 5 stack on top of the Phase 1/4 doubles: real store, policy, publisher, engine and
+ * content service — only the transport and the clock are controlled by the test.
+ *
+ * Nothing here talks to a network: `publishText`/`publishPhoto` are doubles, and the market state is
+ * seeded through the Phase 1 harness, so no test can ever send a real channel message (§27).
+ */
+export function createChannelHarness(
+  env: EnvMap = {},
+  options: {
+    market?: MarketHarness;
+    platform?: PlatformHarness;
+    config?: AppConfigService;
+    store?: PublicationStore;
+    /** Replace the Phase 4 projection (pure snapshot tests, no Phase 1 seeding needed). */
+    intelligence?: MarketIntelligenceService;
+  } = {},
+): ChannelHarness {
+  const config = options.config ?? createAppConfigService(env);
+  const market =
+    options.market ??
+    createMarketHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+  const platform =
+    options.platform ??
+    createPlatformHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+  const store = options.store ?? new PublicationStore(config);
+  const intelligence =
+    options.intelligence ??
+    new MarketIntelligenceService(config, market.marketState);
+  const publisher = new ChannelPublisher(
+    config,
+    platform.client as unknown as BotApiClient,
+  );
+  const policy = new ChannelPolicyService(config, store);
+  const engine = new ChannelEngineService(
+    config,
+    store,
+    publisher,
+    policy,
+    intelligence,
+    new PriceMessageBuilder(config),
+    new PosterService(config),
+  );
+  const content = new ContentService(config, store);
+  const contentAdmin = new ContentAdminService(config, content, engine);
+
+  return {
+    config,
+    market,
+    platform,
+    store,
+    publisher,
+    policy,
+    engine,
+    content,
+    contentAdmin,
+    publishes: () => platform.calls.filter((call) => call.kind === 'publish'),
+    messages: () => platform.calls.filter((call) => call.kind === 'send'),
+    load: () => store.ensureLoaded(),
+  };
+}
+
 export interface UxHarness {
   config: AppConfigService;
   platform: PlatformHarness;
@@ -421,6 +802,7 @@ export interface UxHarness {
   alerts: AlertService;
   alertStore: AlertStore;
   notifications: AlertNotificationService;
+  channel: ChannelHarness;
   botUx: BotUxService;
   /** Rendered platform calls of a given kind. */
   rendered: () => PlatformCall[];
@@ -454,6 +836,11 @@ export function createUxHarness(
     users,
   );
   const events = new UxEventLogService();
+  // Phase 5: the content surface is part of the same bot (in-memory by default).
+  const channel = createChannelHarness(
+    { ...env, BOT_POLLING_ENABLED: 'false' },
+    { market, platform, config },
+  );
   const alertStore = options.alertStore ?? new AlertStore(config);
   const alerts = new AlertService(
     config,
@@ -475,6 +862,7 @@ export function createUxHarness(
     users,
     events,
     alerts,
+    channel.contentAdmin,
   );
 
   const rendered = (): PlatformCall[] =>
@@ -493,6 +881,7 @@ export function createUxHarness(
     alerts,
     alertStore,
     notifications,
+    channel,
     botUx,
     rendered,
     last: () => {

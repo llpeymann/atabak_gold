@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { AlertService } from '../../alerts/alert.service';
 import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
+import { ContentAdminService } from '../content/content-admin.service';
+import { ContentService } from '../../channel/content.service';
+import { PublicationStore } from '../../channel/publication.store';
+import { ChannelEngineService } from '../../channel/channel-engine.service';
 import {
   callbackDataForFavorite,
   callbackDataForManageFavorites,
@@ -118,6 +122,11 @@ describe('favorites flow (integration)', () => {
       users,
       new UxEventLogService(),
       alerts,
+      new ContentAdminService(
+        config,
+        new ContentService(config, new PublicationStore(config)),
+        {} as unknown as ChannelEngineService,
+      ),
     );
 
     return { botUx, store, users, platform, market, config };

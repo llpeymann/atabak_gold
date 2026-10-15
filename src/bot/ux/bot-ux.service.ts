@@ -18,9 +18,11 @@ import {
   AlertCallbackAction,
   CallbackAction,
   isAlertAction,
+  isContentAction,
   parseCallbackData,
   ScreenKey,
 } from './callback-data';
+import { ContentAdminService } from '../content/content-admin.service';
 import { AlertTypeKey } from './alert-callback.types';
 import { AlertService } from '../../alerts/alert.service';
 import {
@@ -164,6 +166,7 @@ export class BotUxService {
     private readonly users: UserService,
     private readonly events: UxEventLogService,
     private readonly alerts: AlertService,
+    private readonly contentAdmin: ContentAdminService,
   ) {}
 
   /** Entry point used by the inbound poller (and by tests). Never throws for bad input. */
@@ -264,6 +267,28 @@ export class BotUxService {
       return;
     }
 
+    // Phase 5 — the editorial content surface. It is admin-gated server-side; a non-admin gets the
+    // ordinary menu (the existence of the surface is not disclosed by an error, §22).
+    if (command === 'content' || this.contentAdmin.owns(message.text ?? '')) {
+      const handled = await this.contentAdmin.handleCommand(
+        adapter,
+        user,
+        message.text ?? '',
+      );
+
+      if (handled) {
+        return;
+      }
+
+      this.remember(user.id, 'menu');
+      await adapter.render({
+        chatId: message.chatId,
+        text: formatMenuScreen(),
+        keyboard: mainMenuKeyboard(),
+      });
+      return;
+    }
+
     // Anything else is not a command the product supports: stay helpful, do not invent APIs.
     this.events.record('unknown_command', {
       platform: adapter.platform,
@@ -284,6 +309,19 @@ export class BotUxService {
     callback: InboundCallback,
   ): Promise<void> {
     const action = parseCallbackData(callback.data);
+
+    // Phase 5 — the content surface acknowledges the press itself (its toasts differ per action),
+    // so it is dispatched *before* the generic acknowledgement: exactly one answer per callback.
+    if (action && isContentAction(action)) {
+      await this.contentAdmin.handleCallback(
+        adapter,
+        user,
+        callback.callbackId,
+        typeof callback.messageId === 'number' ? callback.messageId : undefined,
+        action,
+      );
+      return;
+    }
 
     // Acknowledge first: the platform stops the loading spinner and the user gets immediate
     // feedback even when the requested screen is being rendered (§26).
