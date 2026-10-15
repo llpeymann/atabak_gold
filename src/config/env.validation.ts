@@ -1,6 +1,11 @@
 import { Logger } from '@nestjs/common';
 
 import { isMoneyUnit, MoneyUnit } from '../common/money';
+import {
+  CTA_CHOICES,
+  isMessageType,
+  MESSAGE_TYPES,
+} from '../channel/channel.types';
 
 /**
  * Startup validation for environment variables.
@@ -111,6 +116,19 @@ export const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   // Scheduled daily market report (off by default for the same reason).
   CHANNEL_DAILY_REPORT_ENABLED: 'false',
   CHANNEL_DAILY_REPORT_TIME: '23:00',
+  // --- Phase 6: channel <-> bot integration ---
+  // Public bot username per platform (used to build deep links such as t.me/<username>?start=gold).
+  // Empty disables every link that would point at that platform's bot (no guessed usernames, ever).
+  BALE_BOT_USERNAME: '',
+  TELEGRAM_BOT_USERNAME: '',
+  // Public channel link for Telegram. Bale keeps using CHANNEL_URL; the two are different objects.
+  TELEGRAM_CHANNEL_URL: '',
+  // Channel -> bot call-to-action buttons on eligible publications.
+  CHANNEL_CTA_ENABLED: 'true',
+  // Optional per-type CTA override, e.g. "DAILY_REPORT=prices,EDUCATIONAL=none".
+  CHANNEL_CTA_ROUTES: '',
+  // Bot -> channel invitation row on the market-intelligence screens.
+  BOT_CHANNEL_INVITE_ENABLED: 'true',
 };
 
 const logger = new Logger('EnvironmentValidation');
@@ -353,6 +371,115 @@ export function parseMovementThresholdOverrides(
 }
 
 /**
+ * Read a public bot username (Phase 6).
+ *
+ * A bot username cannot be derived from a bot token, so it is *configuration*: empty means “no public
+ * link for this platform” and every deep link / CTA for that platform is then omitted instead of being
+ * guessed. A non-empty value must be a syntactically valid platform username.
+ */
+function readBotUsername(env: Record<string, unknown>, key: string): string {
+  const raw = asString(env, key);
+
+  if (raw === '') {
+    return '';
+  }
+
+  const normalized = raw.startsWith('@') ? raw.slice(1) : raw;
+
+  if (!/^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(normalized)) {
+    throw new EnvironmentValidationError(
+      `Invalid ${key}: "${raw}" — expected a bot username such as atabak_gold_bot (letters, digits, underscore)`,
+    );
+  }
+
+  return normalized;
+}
+
+/**
+ * Read an optional public URL. An empty value is a *disabled destination* (the affected link is not
+ * rendered), while a non-empty malformed value still fails startup — a typo must never degrade into a
+ * silently missing link.
+ */
+function readOptionalUrl(
+  env: Record<string, unknown>,
+  key: string,
+  fallback: string,
+): string {
+  const raw = asString(env, key);
+
+  if (raw === '') {
+    return fallback === '' ? '' : fallback;
+  }
+
+  return readUrl(env, key);
+}
+
+/**
+ * Routes a CTA may point at (Phase 6 §6).
+ *
+ * Derived from the canonical `CTA_CHOICES` of the channel contract — `auto` is a content-editorial
+ * choice, not a route an environment may name, so it is the only value excluded here.
+ */
+export const CTA_ROUTE_VALUES: readonly string[] = CTA_CHOICES.filter(
+  (choice) => choice !== 'auto',
+);
+
+/**
+ * Parse `CHANNEL_CTA_ROUTES` (`TYPE=route,TYPE=route`) into a lookup table.
+ * Only the seven registered message types and the approved routes are accepted; `none` disables the
+ * CTA for that type. An unknown key fails startup instead of being ignored silently.
+ */
+export function parseCtaRouteOverrides(raw: unknown): Record<string, string> {
+  const text = toPlainString(raw).trim();
+
+  if (text === '') {
+    return {};
+  }
+
+  const overrides: Record<string, string> = {};
+
+  for (const entry of text.split(',')) {
+    const trimmed = entry.trim();
+
+    if (trimmed === '') {
+      continue;
+    }
+
+    const parts = trimmed.split('=');
+
+    // Exactly one `=`: a second one is a typo, and accepting it would silently ignore half the value.
+    if (parts.length !== 2) {
+      throw new EnvironmentValidationError(
+        `Invalid CHANNEL_CTA_ROUTES entry "${trimmed}" — expected <${ctaOverrideTypes()}>=<${CTA_ROUTE_VALUES.join('|')}>`,
+      );
+    }
+
+    const type = (parts[0] ?? '').trim().toUpperCase();
+    const route = (parts[1] ?? '').trim().toLowerCase();
+
+    if (!isMessageTypeName(type) || !CTA_ROUTE_VALUES.includes(route)) {
+      throw new EnvironmentValidationError(
+        `Invalid CHANNEL_CTA_ROUTES entry "${trimmed}" — expected <${ctaOverrideTypes()}>=<${CTA_ROUTE_VALUES.join('|')}>`,
+      );
+    }
+
+    overrides[type] = route;
+  }
+
+  return overrides;
+}
+
+/** The seven registered message types, taken from the registry that defines them (single source). */
+function isMessageTypeName(value: string): boolean {
+  return isMessageType(value);
+}
+
+/** Human-readable list of the types an override may name (used in the error message only). */
+function ctaOverrideTypes(): string {
+  return MESSAGE_TYPES.join('|');
+}
+
+/**
  * Parse the admin allow-list (`CHANNEL_ADMIN_USER_IDS`).
  *
  * Each entry is either `bale:<userId>` / `telegram:<userId>` (recommended: the platform is part of
@@ -496,7 +623,13 @@ export function validateEnvironment(
     100,
     300_000,
   );
-  env.CHANNEL_URL = readUrl(env, 'CHANNEL_URL');
+  // Phase 6: an empty value means "no public channel destination" (the link is then omitted);
+  // a malformed, non-empty value still fails startup.
+  env.CHANNEL_URL = readOptionalUrl(
+    env,
+    'CHANNEL_URL',
+    'https://ble.ir/tala_atabak',
+  );
 
   env.MAX_ALERTS_PER_USER = readInteger(env, 'MAX_ALERTS_PER_USER', 1, 100);
   env.ALERT_NOTIFICATION_MAX_RETRIES = readInteger(
@@ -582,6 +715,16 @@ export function validateEnvironment(
   env.CHANNEL_DAILY_REPORT_TIME = readTimeOfDay(
     env,
     'CHANNEL_DAILY_REPORT_TIME',
+  );
+  // --- Phase 6: channel <-> bot integration ---
+  env.BALE_BOT_USERNAME = readBotUsername(env, 'BALE_BOT_USERNAME');
+  env.TELEGRAM_BOT_USERNAME = readBotUsername(env, 'TELEGRAM_BOT_USERNAME');
+  env.TELEGRAM_CHANNEL_URL = readOptionalUrl(env, 'TELEGRAM_CHANNEL_URL', '');
+  env.CHANNEL_CTA_ENABLED = readBoolean(env, 'CHANNEL_CTA_ENABLED');
+  parseCtaRouteOverrides(env.CHANNEL_CTA_ROUTES);
+  env.BOT_CHANNEL_INVITE_ENABLED = readBoolean(
+    env,
+    'BOT_CHANNEL_INVITE_ENABLED',
   );
   parseAdminUserIds(env.CHANNEL_ADMIN_USER_IDS);
 

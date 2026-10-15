@@ -14,6 +14,8 @@ import { PriceMessageBuilder } from '../bot/price-message.builder';
 import { ContentAdminService } from '../bot/content/content-admin.service';
 import { ChannelEngineService } from '../channel/channel-engine.service';
 import { ChannelPolicyService } from '../channel/channel-policy.service';
+import { CtaPolicyService } from '../channel/cta-policy.service';
+import { BotDestinationService } from '../bot/destination.service';
 import { ChannelPublisher } from '../channel/channel-publisher.service';
 import { ContentService } from '../channel/content.service';
 import { PublicationStore } from '../channel/publication.store';
@@ -30,11 +32,13 @@ import { BotApiClient } from '../platform/bot-api.client';
 import { PlatformRegistry } from '../platform/platform-registry.service';
 import {
   InboundUpdate,
+  Keyboard,
   Platform,
   PlatformFailureKind,
   PlatformPublishResult,
   PlatformSendResult,
 } from '../platform/platform.types';
+import { toReplyMarkup } from '../platform/platform-adapter';
 import { UserService } from '../users/user.service';
 import { UserStore } from '../users/user.store';
 import { AppConfigService } from '../config/app-config.service';
@@ -434,7 +438,12 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
     chatId: string,
     text: string,
     photoUrl?: string,
+    keyboard?: Keyboard,
   ): Promise<PlatformPublishResult> => {
+    // Phase 6: the Channel → Bot CTA travels as a real reply markup, so the double records it the same
+    // way the wire would carry it (§27.2 — assertions stay at the API level).
+    const markup: WireKeyboard | null =
+      keyboard === undefined ? null : (toReplyMarkup(keyboard) as WireKeyboard);
     const platformScoped =
       kind === 'photo' ||
       publishFailurePlatform === null ||
@@ -456,7 +465,7 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
         platform,
         chatId,
         text,
-        markup: null,
+        markup,
         messageId: null,
         success: false,
         failureKind: failure,
@@ -485,7 +494,7 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
       platform,
       chatId,
       text,
-      markup: null,
+      markup,
       messageId: id,
       success: true,
       failureKind: null,
@@ -503,13 +512,18 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
   };
 
   const publishText = jest.fn(
-    (platform: Platform, chatId: string, text: string) =>
-      publish('text', platform, chatId, text),
+    (platform: Platform, chatId: string, text: string, keyboard?: Keyboard) =>
+      publish('text', platform, chatId, text, undefined, keyboard),
   );
 
   const publishPhoto = jest.fn(
-    (platform: Platform, chatId: string, photoUrl: string, caption?: string) =>
-      publish('photo', platform, chatId, caption ?? '', photoUrl),
+    (
+      platform: Platform,
+      chatId: string,
+      photoUrl: string,
+      caption?: string,
+      keyboard?: Keyboard,
+    ) => publish('photo', platform, chatId, caption ?? '', photoUrl, keyboard),
   );
 
   const answerCallbackQuery = jest.fn(
@@ -719,6 +733,10 @@ export interface ChannelHarness {
   store: PublicationStore;
   publisher: ChannelPublisher;
   policy: ChannelPolicyService;
+  /** Phase 6 — CTA policy used by the engine (exposed for policy-level assertions). */
+  ctaPolicy: CtaPolicyService;
+  /** Phase 6 — destination builder (deep links / channel links), config-driven. */
+  destinations: BotDestinationService;
   engine: ChannelEngineService;
   content: ContentService;
   contentAdmin: ContentAdminService;
@@ -758,22 +776,31 @@ export function createChannelHarness(
   const intelligence =
     options.intelligence ??
     new MarketIntelligenceService(config, market.marketState);
+  const destinations = new BotDestinationService(config);
   const publisher = new ChannelPublisher(
     config,
     platform.client as unknown as BotApiClient,
+    destinations,
   );
   const policy = new ChannelPolicyService(config, store);
+  const ctaPolicy = new CtaPolicyService(config);
   const engine = new ChannelEngineService(
     config,
     store,
     publisher,
     policy,
+    ctaPolicy,
     intelligence,
     new PriceMessageBuilder(config),
     new PosterService(config),
   );
   const content = new ContentService(config, store);
-  const contentAdmin = new ContentAdminService(config, content, engine);
+  const contentAdmin = new ContentAdminService(
+    config,
+    content,
+    engine,
+    ctaPolicy,
+  );
 
   return {
     config,
@@ -782,6 +809,8 @@ export function createChannelHarness(
     store,
     publisher,
     policy,
+    ctaPolicy,
+    destinations,
     engine,
     content,
     contentAdmin,
@@ -863,6 +892,7 @@ export function createUxHarness(
     events,
     alerts,
     channel.contentAdmin,
+    channel.destinations,
   );
 
   const rendered = (): PlatformCall[] =>

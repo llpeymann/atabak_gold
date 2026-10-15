@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { BotDestinationService } from '../bot/destination.service';
 import { AppConfigService } from '../config/app-config.service';
 import { BotApiClient } from '../platform/bot-api.client';
-import { Platform } from '../platform/platform.types';
+import { Keyboard, Platform } from '../platform/platform.types';
 import {
+  BotRoute,
   DeliveryStatus,
   FailureCategory,
   MediaStatus,
@@ -39,6 +41,8 @@ export interface ChannelDeliveryOutcome {
   mediaStatus: MediaStatus;
   mediaError: string | null;
   error: string | null;
+  /** Phase 6 — CTA route actually attached to this delivery (`null` = no button was sent). */
+  ctaRoute: BotRoute | null;
   durationMs: number;
 }
 
@@ -51,6 +55,7 @@ export class ChannelPublisher {
   constructor(
     private readonly config: AppConfigService,
     private readonly client: BotApiClient,
+    private readonly destinationLinks: BotDestinationService,
   ) {
     this.captionLimit = this.config.channelMediaCaptionLimit;
 
@@ -96,12 +101,16 @@ export class ChannelPublisher {
     payload: PublicationPayload,
   ): Promise<ChannelDeliveryOutcome> {
     const startedAt = Date.now();
+    // Phase 6 — the CTA is resolved *per destination*: the Bale bot link is not the Telegram bot link,
+    // and a platform without a configured public bot username simply gets no button (§7 rule 8).
+    const keyboard = this.ctaKeyboardFor(destination, payload);
 
     if (payload.media === null) {
       const text = await this.client.publishText(
         destination.platform,
         destination.destination,
         payload.text,
+        keyboard,
       );
 
       return this.toOutcome(destination, text.success, {
@@ -112,6 +121,7 @@ export class ChannelPublisher {
         mediaMessageId: null,
         mediaError: null,
         startedAt,
+        ctaRoute: keyboard ? (payload.cta?.route ?? null) : null,
       });
     }
 
@@ -124,6 +134,7 @@ export class ChannelPublisher {
         destination.destination,
         payload.media.url,
         caption,
+        keyboard,
       );
 
       if (photo.success) {
@@ -136,6 +147,7 @@ export class ChannelPublisher {
             photo.messageId === null ? null : String(photo.messageId),
           mediaError: null,
           startedAt,
+          ctaRoute: keyboard ? (payload.cta?.route ?? null) : null,
         });
       }
 
@@ -151,6 +163,7 @@ export class ChannelPublisher {
           destination.platform,
           destination.destination,
           payload.text,
+          keyboard,
         );
 
         return this.toOutcome(destination, fallback.success, {
@@ -161,6 +174,7 @@ export class ChannelPublisher {
           mediaMessageId: null,
           mediaError: photo.error,
           startedAt,
+          ctaRoute: keyboard ? (payload.cta?.route ?? null) : null,
         });
       }
 
@@ -172,14 +186,17 @@ export class ChannelPublisher {
         mediaMessageId: null,
         mediaError: null,
         startedAt,
+        ctaRoute: null,
       });
     }
 
-    // Long editorial text: text message first, then the media as its own message.
+    // Long editorial text: text message first (carrying the CTA — it is the primary message), then the
+    // media as its own message. The button is never duplicated on both messages.
     const text = await this.client.publishText(
       destination.platform,
       destination.destination,
       payload.text,
+      keyboard,
     );
 
     if (!text.success) {
@@ -191,6 +208,7 @@ export class ChannelPublisher {
         mediaMessageId: null,
         mediaError: null,
         startedAt,
+        ctaRoute: null,
       });
     }
 
@@ -205,6 +223,7 @@ export class ChannelPublisher {
       failureKind: null,
       error: null,
       mediaStatus: photo.success ? 'SENT' : 'FAILED',
+      ctaRoute: keyboard ? (payload.cta?.route ?? null) : null,
       mediaMessageId:
         photo.success && photo.messageId !== null
           ? String(photo.messageId)
@@ -225,6 +244,7 @@ export class ChannelPublisher {
       mediaMessageId: string | null;
       mediaError: string | null;
       startedAt: number;
+      ctaRoute: BotRoute | null;
     },
   ): ChannelDeliveryOutcome {
     return {
@@ -237,8 +257,29 @@ export class ChannelPublisher {
       mediaStatus: details.mediaStatus,
       mediaError: details.mediaError,
       error: details.error,
+      // A CTA only counts as delivered when the message that carries it actually went out (§14): a
+      // failed send must never be recorded as "the button was published".
+      ctaRoute: success ? details.ctaRoute : null,
       durationMs: Date.now() - details.startedAt,
     };
+  }
+
+  /**
+   * The inline keyboard of one destination for this payload (Phase 6 §4.3).
+   *
+   * Only the *intent* comes from the payload; the URL is built by the destination service for this
+   * platform. `null` means “send without a button”, which is the documented fallback whenever the CTA
+   * cannot be built safely.
+   */
+  private ctaKeyboardFor(
+    destination: ChannelDestination,
+    payload: PublicationPayload,
+  ): Keyboard | null {
+    if (!payload.cta) {
+      return null;
+    }
+
+    return this.destinationLinks.ctaKeyboard(destination.platform, payload.cta);
   }
 
   /**

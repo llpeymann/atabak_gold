@@ -6,6 +6,8 @@ import { AlertService } from '../../alerts/alert.service';
 import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
 import { ContentAdminService } from '../content/content-admin.service';
+import { CtaPolicyService } from '../../channel/cta-policy.service';
+import { BotDestinationService } from '../destination.service';
 import { ContentService } from '../../channel/content.service';
 import { PublicationStore } from '../../channel/publication.store';
 import { ChannelEngineService } from '../../channel/channel-engine.service';
@@ -126,7 +128,9 @@ describe('favorites flow (integration)', () => {
         config,
         new ContentService(config, new PublicationStore(config)),
         {} as unknown as ChannelEngineService,
+        new CtaPolicyService(config),
       ),
+      new BotDestinationService(config),
     );
 
     return { botUx, store, users, platform, market, config };

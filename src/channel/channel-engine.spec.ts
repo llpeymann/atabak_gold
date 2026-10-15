@@ -13,6 +13,8 @@ import {
 } from '../testing/test-doubles';
 import { ChannelEngineService } from './channel-engine.service';
 import { ChannelPolicyService } from './channel-policy.service';
+import { CtaPolicyService } from './cta-policy.service';
+import { BotDestinationService } from '../bot/destination.service';
 import { ChannelPublisher } from './channel-publisher.service';
 import { PublicationStore } from './publication.store';
 import { PriceMessageBuilder } from '../bot/price-message.builder';
@@ -401,6 +403,7 @@ describe('ChannelEngine — delivery, retries and failures (§27.7)', () => {
       store,
       emptyPublisher,
       new ChannelPolicyService(config, store),
+      new CtaPolicyService(config),
       createIntelligenceStub(liveSnapshot),
       new PriceMessageBuilder(config),
       new PosterService(config),
@@ -446,12 +449,14 @@ describe('ChannelEngine — persistence and restart recovery (§27.8)', () => {
     const publisher = new ChannelPublisher(
       config,
       platform.client as unknown as BotApiClient,
+      new BotDestinationService(config),
     );
     const engine = new ChannelEngineService(
       config,
       store,
       publisher,
       new ChannelPolicyService(config, store),
+      new CtaPolicyService(config),
       createIntelligenceStub(liveSnapshot),
       new PriceMessageBuilder(config),
       new PosterService(config),

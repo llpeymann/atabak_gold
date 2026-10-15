@@ -8,6 +8,8 @@ import {
   ContentMutationResult,
   ContentStatus,
   createChannelId,
+  CtaRouteChoice,
+  isCtaRouteChoice,
   MessageType,
 } from './channel.types';
 import {
@@ -313,6 +315,83 @@ export class ContentService {
   }
 
   /** Approve the *current* revision (§7). */
+  /**
+   * Phase 6 — choose the call-to-action button of an editorial item (§4.2).
+   *
+   * `auto` returns to the type policy, `none` removes the button, and a concrete route is an explicit
+   * editorial decision — the *only* way a price-alert promotion post can exist, because the seven
+   * message types contain no promotion type and inventing one would break the Phase 5 registry.
+   *
+   * The button is part of the rendered payload, so changing it is a material change: the revision is
+   * incremented and a previous approval/schedule is cleared, exactly like a body edit.
+   */
+  async setCta(
+    id: string,
+    choice: CtaRouteChoice,
+    now = new Date(),
+  ): Promise<ContentMutationResult> {
+    const existing = this.store.findContent(id);
+
+    if (!existing) {
+      return { ok: false, reason: 'NOT_FOUND' };
+    }
+
+    if (existing.status === 'PUBLISHED') {
+      return {
+        ok: false,
+        reason: 'INVALID_STATE',
+        detail: 'a published item cannot be edited',
+      };
+    }
+
+    if (!isCtaRouteChoice(choice)) {
+      return {
+        ok: false,
+        reason: 'INVALID_INPUT',
+        detail: `unsupported cta choice "${String(choice)}"`,
+      };
+    }
+
+    const currentChoice = existing.ctaRoute ?? 'auto';
+
+    if (currentChoice === choice) {
+      return { ok: true, content: existing };
+    }
+
+    const updated = await this.store.transact((tx) => {
+      const current = tx.findContent(id);
+
+      if (!current) {
+        return null;
+      }
+
+      const next: ContentItem = {
+        ...current,
+        ctaRoute: choice,
+        revision: current.revision + 1,
+        status: current.status !== 'DRAFT' ? 'DRAFT' : current.status,
+        approvedAt: null,
+        approvedBy: null,
+        scheduledAt: null,
+        updatedAt: now.toISOString(),
+      };
+
+      tx.saveContent(next);
+
+      return next;
+    });
+
+    if (!updated) {
+      return { ok: false, reason: 'NOT_FOUND' };
+    }
+
+    this.logger.log(
+      `Content ${id} CTA set to "${choice}" → revision ${updated.revision} (re-approval required when it was approved).`,
+    );
+
+    return { ok: true, content: updated };
+  }
+
   async approve(
     id: string,
     adminId: string,

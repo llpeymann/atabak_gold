@@ -21,8 +21,13 @@ import {
 } from '../ux/callback-data';
 import { ContentService } from '../../channel/content.service';
 import { ChannelEngineService } from '../../channel/channel-engine.service';
-import { ContentItem, MessageType } from '../../channel/channel.types';
+import {
+  ContentItem,
+  isCtaRouteChoice,
+  MessageType,
+} from '../../channel/channel.types';
 import { PILLAR_TITLES, specFor } from '../../channel/message-registry';
+import { CTA_LABELS, CtaPolicyService } from '../../channel/cta-policy.service';
 import { Keyboard, KeyboardRow } from '../../platform/platform.types';
 
 /**
@@ -40,6 +45,7 @@ import { Keyboard, KeyboardRow } from '../../platform/platform.types';
  *   /content new <TYPE>                       (title on the next line, body after it)
  *   /content media <id> <url|->                attach/remove an image
  *   /content market <id> on|off               append the validated market block (nightly)
+ *   /content cta <id> auto|none|<route>       Phase 6: the button of the published message
  *   /content approve <id>
  *   /content schedule <id> YYYY-MM-DD HH:MM   Tehran wall clock
  *   /content publish <id>                     publish now (approval is re-checked)
@@ -57,6 +63,7 @@ interface ParsedContentCommand {
     | 'new'
     | 'media'
     | 'market'
+    | 'cta'
     | 'approve'
     | 'schedule'
     | 'publish'
@@ -101,6 +108,7 @@ export class ContentAdminService {
     private readonly config: AppConfigService,
     private readonly content: ContentService,
     private readonly engine: ChannelEngineService,
+    private readonly ctaPolicy: CtaPolicyService,
   ) {}
 
   /** An empty allow-list disables the surface entirely. */
@@ -166,6 +174,9 @@ export class ContentAdminService {
         return true;
       case 'market':
         await this.handleMarketFlag(adapter, user, parsed);
+        return true;
+      case 'cta':
+        await this.handleCta(adapter, user, parsed);
         return true;
       case 'approve':
         await this.handleApprove(adapter, user, parsed.id ?? '');
@@ -330,6 +341,17 @@ export class ContentAdminService {
     );
   }
 
+  /** Human-readable CTA state of an item (Phase 6): the admin's choice or the type default. */
+  private ctaLabelOf(item: ContentItem): string {
+    const choice = item.ctaRoute ?? 'auto';
+
+    if (choice === 'auto') {
+      return `خودکار (${this.ctaPolicy.describeDefault(item.messageType)})`;
+    }
+
+    return choice === 'none' ? 'بدون دکمه' : CTA_LABELS[choice];
+  }
+
   private describeItem(item: ContentItem): string {
     const spec = specFor(item.messageType);
     const pillar = PILLAR_TITLES[item.messageType];
@@ -349,6 +371,7 @@ export class ContentAdminService {
           `${escapeHtml(tehranTimeFa(new Date(item.approvedAt)))}`,
       item.mediaUrl === null ? '🖼 رسانه: —' : '🖼 رسانه: دارد',
       `📊 داده بازار: ${item.includeMarketData ? 'بله' : 'خیر'}`,
+      `🔗 دکمه پیام: ${escapeHtml(this.ctaLabelOf(item))}`,
       item.lastError === null ? '' : `⚠️ ${escapeHtml(item.lastError)}`,
       '',
       `🏷 <b>${escapeHtml(item.title || '(بدون عنوان)')}</b>`,
@@ -442,6 +465,43 @@ export class ContentAdminService {
       user,
       result,
       'تنظیم داده بازار به‌روزرسانی شد.',
+    );
+  }
+
+  /**
+   * Phase 6 — `/content cta <id> auto|none|alert|prices|coin|gold|channel`.
+   *
+   * This is the explicit, admin-controlled way to put a button on an editorial post (and the only way
+   * an alert-promotion post can exist, §4.2). Changing it counts as a material edit: the item returns
+   * to `DRAFT` and needs a fresh approval, exactly like a body change.
+   */
+  private async handleCta(
+    adapter: PlatformAdapter,
+    user: User,
+    parsed: ParsedContentCommand,
+  ): Promise<void> {
+    const item = parsed.id === undefined ? null : this.content.find(parsed.id);
+    const argument = (parsed.argument ?? '').trim().toLowerCase();
+
+    if (!item || !isCtaRouteChoice(argument)) {
+      await this.send(
+        adapter,
+        user,
+        this.helpText(
+          'گزینه دکمه باید یکی از این‌ها باشد: <code>auto</code>، <code>none</code>، ' +
+            '<code>alert</code>، <code>prices</code>، <code>coin</code>، <code>gold</code>، <code>channel</code>.',
+        ),
+      );
+      return;
+    }
+
+    const result = await this.content.setCta(item.id, argument);
+
+    await this.reportMutation(
+      adapter,
+      user,
+      result,
+      `دکمه پیام روی «${argument}» تنظیم شد.`,
     );
   }
 
@@ -659,6 +719,7 @@ export class ContentAdminService {
       '   خط دوم: عنوان، خطوط بعد: متن',
       '<code>/content media &lt;id&gt; &lt;url|-&gt;</code>',
       '<code>/content market &lt;id&gt; on|off</code>',
+      '<code>/content cta &lt;id&gt; auto|none|alert|prices|coin|gold|channel</code>',
       '<code>/content approve &lt;id&gt;</code>',
       '<code>/content schedule &lt;id&gt; YYYY-MM-DD HH:MM</code>',
       '<code>/content publish &lt;id&gt;</code>',
@@ -808,6 +869,15 @@ export function parseContentCommand(text: string): ParsedContentCommand {
       }
 
       return { action: 'market', id, argument: flag };
+    }
+    case 'cta': {
+      const [id, choice, ...extra] = rest;
+
+      if (!isContentIdToken(id) || choice === undefined || extra.length > 0) {
+        return { action: 'invalid' };
+      }
+
+      return { action: 'cta', id, argument: choice };
     }
     case 'schedule': {
       const id = rest[0];

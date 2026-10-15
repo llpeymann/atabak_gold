@@ -15,8 +15,10 @@ import { PriceMessageBuilder } from './bot/price-message.builder';
 import { BotUxService } from './bot/ux/bot-ux.service';
 import { MarketViewService } from './bot/ux/market-view.service';
 import { UxEventLogService } from './bot/ux/ux-event-log.service';
+import { BotDestinationService } from './bot/destination.service';
 import { ChannelEngineService } from './channel/channel-engine.service';
 import { ChannelPolicyService } from './channel/channel-policy.service';
+import { CtaPolicyService } from './channel/cta-policy.service';
 import { ChannelPublisher } from './channel/channel-publisher.service';
 import { ContentAdminService } from './bot/content/content-admin.service';
 import { ContentService } from './channel/content.service';
@@ -89,6 +91,9 @@ import { UserStore } from './users/user.store';
     // Registered here (the project keeps one flat module tree) so the engine and every older phase
     // share exactly one instance of the market state, the intelligence service and the transport.
     PublicationStore,
+    // Phase 6 — public destinations (deep links / channel links) and the channel → bot CTA policy.
+    BotDestinationService,
+    CtaPolicyService,
     ChannelPolicyService,
     ChannelPublisher,
     ChannelEngineService,

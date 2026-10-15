@@ -166,8 +166,11 @@ export function favoritesKeyboard(): Keyboard {
   ];
 }
 
-export function channelKeyboard(url: string): Keyboard {
-  return [[{ text: '📢 عضویت در کانال اتابک', url }], ...screenFooter()];
+export function channelKeyboard(url: string | null): Keyboard {
+  return [
+    ...(url ? [[{ text: '📢 عضویت در کانال اتابک', url }]] : []),
+    ...screenFooter(),
+  ];
 }
 
 /** Toggle list for favorites management: `☑` selected, `☐` not selected. */

@@ -1,5 +1,6 @@
 import {
   EnvironmentValidationError,
+  parseCtaRouteOverrides,
   parseSymbolUnits,
   parseThresholdOverrides,
   validateEnvironment,
@@ -172,5 +173,110 @@ describe('Phase 1 market reliability variables', () => {
       TRY: 15,
     });
     expect(parseThresholdOverrides('')).toEqual({});
+  });
+});
+
+describe('Phase 6 configuration (§9)', () => {
+  it('leaves every channel↔bot key disabled by default (no unverified destination)', () => {
+    const env = validateEnvironment(validEnv());
+
+    expect(env.BALE_BOT_USERNAME).toBe('');
+    expect(env.TELEGRAM_BOT_USERNAME).toBe('');
+    expect(env.TELEGRAM_CHANNEL_URL).toBe('');
+    // The Bale channel keeps its Phase 1 default; Telegram needs its own key.
+    expect(env.CHANNEL_URL).toBe('https://ble.ir/tala_atabak');
+    expect(env.CHANNEL_CTA_ENABLED).toBe('true');
+    expect(env.CHANNEL_CTA_ROUTES).toBe('');
+    expect(env.BOT_CHANNEL_INVITE_ENABLED).toBe('true');
+  });
+
+  it('normalizes a bot username written with a leading @', () => {
+    const env = validateEnvironment({
+      ...validEnv(),
+      BALE_BOT_USERNAME: ' @atabak_bot ',
+    });
+
+    expect(env.BALE_BOT_USERNAME).toBe('atabak_bot');
+  });
+
+  it.each([
+    'atabak-bot',
+    'ab',
+    '1atabak_bot',
+    '@',
+    'atabak bot',
+    'atabak_bot!',
+  ])('refuses to start with the unusable bot username %s', (username) => {
+    expect(() =>
+      validateEnvironment({ ...validEnv(), BALE_BOT_USERNAME: username }),
+    ).toThrow(/BALE_BOT_USERNAME/);
+  });
+
+  it('refuses a malformed Telegram channel link instead of guessing one', () => {
+    expect(() =>
+      validateEnvironment({
+        ...validEnv(),
+        TELEGRAM_CHANNEL_URL: 't.me/tala_atabak',
+      }),
+    ).toThrow(/TELEGRAM_CHANNEL_URL/);
+  });
+
+  it('accepts a valid Telegram channel link', () => {
+    const env = validateEnvironment({
+      ...validEnv(),
+      TELEGRAM_CHANNEL_URL: 'https://t.me/tala_atabak',
+    });
+
+    expect(env.TELEGRAM_CHANNEL_URL).toBe('https://t.me/tala_atabak');
+  });
+
+  it.each(['PRICE_UPDATE=alert', 'DAILY_REPORT=none', 'EDUCATIONAL=channel'])(
+    'parses the CTA override %s',
+    (override) => {
+      expect(() =>
+        validateEnvironment({ ...validEnv(), CHANNEL_CTA_ROUTES: override }),
+      ).not.toThrow();
+      expect(parseCtaRouteOverrides(override)).toEqual(
+        Object.fromEntries([override.split('=') as [string, string]]),
+      );
+    },
+  );
+
+  it.each([
+    'PRICE_UPDATE=hack',
+    'UNKNOWN_TYPE=gold',
+    'PRICE_UPDATE',
+    'PRICE_UPDATE=auto',
+    'PRICE_UPDATE=gold=gold',
+  ])('refuses the invalid CTA override %s', (override) => {
+    expect(() =>
+      validateEnvironment({ ...validEnv(), CHANNEL_CTA_ROUTES: override }),
+    ).toThrow(EnvironmentValidationError);
+    expect(() => parseCtaRouteOverrides(override)).toThrow(
+      EnvironmentValidationError,
+    );
+  });
+
+  it('keeps the CTA features switchable without touching anything else', () => {
+    const env = validateEnvironment({
+      ...validEnv(),
+      CHANNEL_CTA_ENABLED: 'false',
+      BOT_CHANNEL_INVITE_ENABLED: 'false',
+    });
+
+    expect(env.CHANNEL_CTA_ENABLED).toBe('false');
+    expect(env.BOT_CHANNEL_INVITE_ENABLED).toBe('false');
+  });
+
+  it('still boots when the optional Telegram platform is entirely unconfigured', () => {
+    expect(() => validateEnvironment(validEnv())).not.toThrow();
+    // …and the CTA keys are optional too.
+    expect(() =>
+      validateEnvironment({
+        ...validEnv(),
+        CHANNEL_CTA_ENABLED: 'false',
+        CHANNEL_CTA_ROUTES: '',
+      }),
+    ).not.toThrow();
   });
 });

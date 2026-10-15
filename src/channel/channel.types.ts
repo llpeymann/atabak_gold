@@ -9,6 +9,11 @@
  *
  * Nothing here knows how a platform is called, and nothing here contains market data.
  */
+import { BotRoute } from '../bot/deep-link';
+
+// The channel layer references bot routes by name (CTA intents); re-exported so channel modules have a
+// single import site.
+export type { BotRoute };
 import { Platform } from '../platform/platform.types';
 import { PriceDirection, PriceUnit } from '../market/market.types';
 
@@ -140,12 +145,49 @@ export interface PublicationDelivery {
   sentAt: string | null;
   lastAttemptAt: string | null;
   lastError: string | null;
+  /**
+   * Phase 6 — the CTA route attached to this delivery, or `null` when the message went out without a
+   * button (feature disabled, or no public bot username for that platform). Optional so documents
+   * written before Phase 6 keep loading.
+   */
+  ctaRoute?: BotRoute | null;
 }
 
 // --- editorial content (§7) ---------------------------------------------------
 
 export type ContentStatus =
   'DRAFT' | 'APPROVED' | 'SCHEDULED' | 'PUBLISHED' | 'FAILED' | 'CANCELLED';
+
+/**
+ * Phase 6 — call-to-action choice stored on an editorial item.
+ *
+ * `auto` follows the message-type policy; `none` removes the button entirely; a concrete route is an
+ * explicit admin decision (the only way an *alert-promotion* post can exist, §4.2).
+ */
+export type CtaRouteChoice = 'auto' | 'none' | BotRoute;
+
+/**
+ * The complete, canonical set of CTA choices (Phase 6 §4.2). Every other list — configuration
+ * validation, the admin command, the item view — is derived from this one, so a choice can never be
+ * accepted in one place and refused in another.
+ */
+export const CTA_CHOICES: readonly CtaRouteChoice[] = [
+  'auto',
+  'none',
+  'alert',
+  'prices',
+  'coin',
+  'gold',
+  'channel',
+];
+
+/** Runtime guard for the CTA choice (configuration/admins may hand over arbitrary strings). */
+export function isCtaRouteChoice(value: unknown): value is CtaRouteChoice {
+  return (
+    typeof value === 'string' &&
+    (CTA_CHOICES as readonly string[]).includes(value)
+  );
+}
 
 export interface ContentItem {
   id: string;
@@ -163,6 +205,11 @@ export interface ContentItem {
    * the Phase 4 snapshot. The block is data, never editorial text.
    */
   includeMarketData: boolean;
+  /**
+   * Call-to-action override (Phase 6). Absent on documents written before Phase 6 — readers must treat
+   * a missing value exactly like `auto`.
+   */
+  ctaRoute?: CtaRouteChoice;
   /** Incremented on every material edit; a new revision invalidates a previous approval (§19). */
   revision: number;
   status: ContentStatus;
@@ -233,6 +280,12 @@ export interface PersistedChannelData {
 
 // --- payload contract (§15) ---------------------------------------------------
 
+/** A channel → bot call to action: the logical route plus its (destination-neutral) label. */
+export interface PublicationCta {
+  route: BotRoute;
+  labelFa: string;
+}
+
 export interface PublicationMedia {
   /** Absolute `http(s)` URL, already validated when the content was saved. */
   url: string;
@@ -259,6 +312,14 @@ export interface PublicationPayload {
   text: string;
   /** Only HTML is produced (all text is escaped before rendering), so it is a literal type. */
   parseMode: 'HTML';
+  /**
+   * Phase 6 — call to action of this publication, if any.
+   *
+   * Only the *intent* is stored here; the platform-specific URL is built per destination by
+   * `BotDestinationService` (a Bale link is not a Telegram link), so the button is correct on each
+   * platform and simply omitted where no public bot username is configured.
+   */
+  cta: PublicationCta | null;
   media: PublicationMedia | null;
   /** Platforms the payload is intended for (idempotency scope, §12). */
   destinationKey: string;

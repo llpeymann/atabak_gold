@@ -14,6 +14,9 @@ import { Platform } from '../../platform/platform.types';
  */
 export type UxEvent =
   | 'start'
+  // Phase 6 — deep links: a recognized route, and a payload the product does not define.
+  | 'start_route'
+  | 'start_unknown_payload'
   | 'menu_open'
   | 'prices_view'
   | 'gold_view'

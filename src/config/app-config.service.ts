@@ -5,6 +5,7 @@ import { isMoneyUnit, MoneyUnit } from '../common/money';
 import { buildSymbolRegistry, SymbolDefinition } from '../market/symbols';
 import {
   parseAdminUserIds,
+  parseCtaRouteOverrides,
   parseMovementThresholdOverrides,
   parseSymbolUnits,
   parseThresholdOverrides,
@@ -219,6 +220,40 @@ export class AppConfigService {
   /** Official channel URL used by the CTA button (single declaration, §35). */
   get channelUrl(): string {
     return this.readString('CHANNEL_URL', 'https://ble.ir/tala_atabak');
+  }
+
+  // --- Phase 6: channel <-> bot integration ----------------------------------
+
+  /** Public username of the Bale bot; empty string = no Bale deep link / CTA is built. */
+  get baleBotUsername(): string {
+    return this.readString('BALE_BOT_USERNAME', '');
+  }
+
+  /** Public username of the Telegram bot; empty string = no Telegram deep link / CTA is built. */
+  get telegramBotUsername(): string {
+    return this.readString('TELEGRAM_BOT_USERNAME', '');
+  }
+
+  /** Public Telegram channel link — a separate destination from the Bale channel (§7). */
+  get telegramChannelUrl(): string {
+    return this.readString('TELEGRAM_CHANNEL_URL', '');
+  }
+
+  /** Whether channel publications may carry a call-to-action button (§4.1). */
+  get channelCtaEnabled(): boolean {
+    return this.readBooleanFlag('CHANNEL_CTA_ENABLED', true);
+  }
+
+  /** Per-message-type CTA overrides (`CHANNEL_CTA_ROUTES`), already validated at startup. */
+  get channelCtaRouteOverrides(): Record<string, string> {
+    return parseCtaRouteOverrides(
+      this.configService.get<string>('CHANNEL_CTA_ROUTES'),
+    );
+  }
+
+  /** Whether the bot screens invite the user to the official channel (§5.2). */
+  get botChannelInviteEnabled(): boolean {
+    return this.readBooleanFlag('BOT_CHANNEL_INVITE_ENABLED', true);
   }
 
   // --- Phase 3: price alerts -------------------------------------------------

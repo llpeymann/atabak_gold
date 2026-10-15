@@ -8,6 +8,7 @@ import { AppModule } from './../src/app.module';
 import { BotService } from './../src/bot/bot.service';
 import { BotUxService } from './../src/bot/ux/bot-ux.service';
 import { MarketEngineService } from './../src/market/market-engine.service';
+import { ChannelEngineService } from './../src/channel/channel-engine.service';
 import { UserStore } from './../src/users/user.store';
 import {
   InboundCallback,
@@ -312,5 +313,110 @@ describe('Bot UX (e2e)', () => {
     expect(text).toContain('گزارش');
     expect(text).toContain('ریال');
     expect(text).toContain('@tala_atabak');
+  });
+
+  /**
+   * Phase 6 — deep links and the channel invitation through the real module graph.
+   *
+   * The whole application boots with the real DI wiring (the CTA policy, the destination service and
+   * the invite row are all resolved by Nest), and only the transport is doubled. This is what catches a
+   * missing provider or a wiring regression that a unit harness would not see.
+   */
+  describe('Phase 6 — channel ↔ bot (e2e)', () => {
+    it('opens the alert wizard from a deep link without creating an alert', async () => {
+      await botUx.handleUpdate(message('/start alert'));
+
+      expect(lastText()).toContain('ساخت هشدار');
+      const markup = wire.at(-1)?.body.reply_markup as {
+        inline_keyboard: { text: string; callback_data?: string }[][];
+      };
+      const data = markup.inline_keyboard
+        .flat()
+        .map((button) => button.callback_data ?? '');
+
+      expect(data.some((value) => value.startsWith('v1:alert:sym:'))).toBe(
+        true,
+      );
+    });
+
+    it('opens the prices screen from a deep link', async () => {
+      await botUx.handleUpdate(message('/start prices'));
+
+      expect(lastText()).toContain('قیمت لحظه');
+    });
+
+    it('answers an unknown payload with the menu instead of a feature', async () => {
+      await botUx.handleUpdate(message('/start admin'));
+
+      expect(lastText()).toContain('منوی اصلی');
+    });
+
+    it('offers exactly the configured channel destination and no invented bot link', async () => {
+      await botUx.handleUpdate(message('/start channel'));
+
+      const markup = wire.at(-1)?.body.reply_markup as {
+        inline_keyboard: { text: string; url?: string }[][];
+      };
+      const urls = markup.inline_keyboard
+        .flat()
+        .map((button) => button.url)
+        .filter((url): url is string => typeof url === 'string');
+
+      expect(lastText()).toContain('کانال');
+      // The configured channel link is offered…
+      expect(urls).toEqual([process.env.CHANNEL_URL]);
+      // …and no bot deep link is fabricated: the e2e environment configures no bot username.
+      expect(urls.some((url) => url.includes('start='))).toBe(false);
+    });
+  });
+
+  /**
+   * Phase 6 — the CTA on a real publication, through the real publisher.
+   *
+   * The Channel Engine and its publisher are the production classes here (only the HTTP transport is
+   * doubled), so this proves the button that reaches the wire is built from configuration — and that a
+   * routine price update never carries the alert route.
+   */
+  it('puts a configured bot CTA on the channel price update (Phase 6)', async () => {
+    // A window of its own (one minute ahead), so the duplicate guard of Phase 5 does not — correctly —
+    // swallow this call: the logical identity of a price update includes its time window.
+    const cycle = await engine.evaluateCycle(
+      rawPricePayload({ ...DEFAULT_SEED_PRICES, IR_GOLD_18K: 17_600_000 }),
+      new Date(),
+    );
+    const channelEngine = app.get(ChannelEngineService);
+
+    const outcome = await channelEngine.publishPriceUpdate(
+      cycle.update,
+      'full',
+      new Date(Date.now() + 60_000),
+    );
+
+    expect(outcome.status).toBe('PUBLISHED');
+
+    const channelSend = wire.find(
+      (call) =>
+        call.url.endsWith('/sendMessage') &&
+        call.body.chat_id === process.env.BALE_CHANNEL_ID,
+    );
+
+    expect(channelSend).toBeDefined();
+
+    const markup = channelSend?.body.reply_markup as
+      { inline_keyboard: { text: string; url?: string }[][] } | undefined;
+
+    expect(markup).toBeDefined();
+
+    const urls = (markup?.inline_keyboard ?? [])
+      .flat()
+      .map((button) => button.url)
+      .filter((url): url is string => typeof url === 'string');
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toMatch(
+      /^https:\/\/ble\.ir\/atabak_e2e_bot\?start=(prices|gold|coin)$/,
+    );
+    // A routine price update must never promote alerts.
+    expect(urls[0]).not.toContain('start=alert');
   });
 });

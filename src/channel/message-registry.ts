@@ -1,3 +1,4 @@
+import { BotRoute } from '../bot/deep-link';
 import {
   isMessageType,
   MessageKind,
@@ -36,6 +37,15 @@ export interface MessageTypeSpec {
   scheduled: boolean;
   /** Longest body an admin may submit for this type (characters). */
   maxBodyChars: number;
+  /**
+   * Phase 6 — the bot destination this type points at by default.
+   *
+   * `'subject-group'` means “refine by the publication's symbols” (gold-only → gold, coin-only → coin,
+   * mixed/general → the full price list); `null` means the type carries no call-to-action button
+   * unless an admin marks a specific content item explicitly. Keeping this in the registry makes the
+   * registry the single source of “what a type is and what it may link to”.
+   */
+  defaultCta: BotRoute | 'subject-group' | null;
 }
 
 /** Titles of the three official content pillars (§6, §20). */
@@ -54,6 +64,7 @@ const REGISTRY: Record<MessageType, MessageTypeSpec> = {
     requiresApproval: false,
     marketDerived: true,
     scheduled: true,
+    defaultCta: 'subject-group',
     maxBodyChars: 0,
   },
   MARKET_MOVEMENT: {
@@ -64,6 +75,7 @@ const REGISTRY: Record<MessageType, MessageTypeSpec> = {
     requiresApproval: false,
     marketDerived: true,
     scheduled: false,
+    defaultCta: 'subject-group',
     maxBodyChars: 0,
   },
   DAILY_RANGE: {
@@ -74,6 +86,7 @@ const REGISTRY: Record<MessageType, MessageTypeSpec> = {
     requiresApproval: false,
     marketDerived: true,
     scheduled: true,
+    defaultCta: 'subject-group',
     maxBodyChars: 0,
   },
   DAILY_REPORT: {
@@ -84,6 +97,7 @@ const REGISTRY: Record<MessageType, MessageTypeSpec> = {
     requiresApproval: false,
     marketDerived: true,
     scheduled: true,
+    defaultCta: 'prices',
     maxBodyChars: 0,
   },
   EDUCATIONAL: {
@@ -94,6 +108,7 @@ const REGISTRY: Record<MessageType, MessageTypeSpec> = {
     requiresApproval: true,
     marketDerived: false,
     scheduled: false,
+    defaultCta: null,
     maxBodyChars: 3_000,
   },
   BRANDED: {
@@ -104,6 +119,7 @@ const REGISTRY: Record<MessageType, MessageTypeSpec> = {
     requiresApproval: true,
     marketDerived: false,
     scheduled: false,
+    defaultCta: null,
     maxBodyChars: 3_000,
   },
   NIGHTLY_ANALYSIS: {
@@ -114,9 +130,20 @@ const REGISTRY: Record<MessageType, MessageTypeSpec> = {
     requiresApproval: true,
     marketDerived: false,
     scheduled: false,
+    defaultCta: 'prices',
     maxBodyChars: 3_000,
   },
 };
+
+/**
+ * Registry default CTA of a type (Phase 6 §4.1) — a *policy input*, not a live decision.
+ * The refinement by subject group and the configuration/content overrides live in `cta-policy`.
+ */
+export function defaultCtaFor(
+  type: MessageType,
+): MessageTypeSpec['defaultCta'] {
+  return REGISTRY[type].defaultCta;
+}
 
 /** Registry lookup — throws for anything that is not one of the seven registered types. */
 export function specFor(type: MessageType): MessageTypeSpec {

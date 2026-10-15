@@ -249,6 +249,33 @@ export function formatChannelScreen(channelHandle: string): string {
   );
 }
 
+/**
+ * Phase 6 — market-report invitation (§5.2).
+ *
+ * Deliberately factual: it describes what the channel is, and never claims a publication time or that
+ * a specific report has already been published (the bot cannot know either).
+ */
+export function formatChannelInviteLine(): string {
+  return '📢 تحلیل کامل‌تر بازار در کانال طلای اتابک';
+}
+
+/** Phase 6 — the answer when a channel destination is requested but not configured (§7 rule 8). */
+export function formatChannelUnavailableScreen(): string {
+  return (
+    '📢 <b>کانال اتابک</b>\n\n' +
+    'در حال حاضر نشانی عمومی کانال در این نسخه تنظیم نشده است.\n' +
+    'به‌محض تنظیم، از همین بخش می‌توانید وارد کانال شوید.'
+  );
+}
+
+/** Phase 6 — a stale or hand-typed start payload: explain, then continue with the normal menu. */
+export function formatUnknownStartScreen(): string {
+  return (
+    '🤔 این لینک برای ربات تعریف نشده است.\n\n' +
+    'از منوی زیر می‌توانید به همه بخش‌ها دسترسی داشته باشید.'
+  );
+}
+
 export function formatMenuScreen(): string {
   return (
     '📋 <b>منوی اصلی</b>\n\n' +

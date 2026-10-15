@@ -23,6 +23,8 @@ import {
   ScreenKey,
 } from './callback-data';
 import { ContentAdminService } from '../content/content-admin.service';
+import { BotDestinationService } from '../destination.service';
+import { parseStartPayload, screenForRoute } from '../deep-link';
 import { AlertTypeKey } from './alert-callback.types';
 import { AlertService } from '../../alerts/alert.service';
 import {
@@ -57,13 +59,16 @@ import { parsePercentInput, parsePriceInput } from './number-input';
 import { MarketViewService } from './market-view.service';
 import { UxEventLogService } from './ux-event-log.service';
 import {
+  formatChannelInviteLine,
   formatChannelScreen,
+  formatChannelUnavailableScreen,
   formatEmptySection,
   formatExpiredCallback,
   formatFavoriteLimitReached,
   formatFavoritesManageScreen,
   formatFavoritesScreen,
   formatMenuScreen,
+  formatUnknownStartScreen,
   formatPriceScreen,
   formatWelcomeScreen,
 } from './ux-format';
@@ -167,6 +172,7 @@ export class BotUxService {
     private readonly events: UxEventLogService,
     private readonly alerts: AlertService,
     private readonly contentAdmin: ContentAdminService,
+    private readonly destinations: BotDestinationService,
   ) {}
 
   /** Entry point used by the inbound poller (and by tests). Never throws for bad input. */
@@ -224,16 +230,7 @@ export class BotUxService {
     const command = asCommand(message);
 
     if (command === 'start') {
-      this.events.record('start', {
-        platform: adapter.platform,
-        userId: user.id,
-      });
-      this.remember(user.id, 'menu');
-      await adapter.render({
-        chatId: message.chatId,
-        text: formatWelcomeScreen(),
-        keyboard: mainMenuKeyboard(),
-      });
+      await this.handleStart(adapter, user, message);
       return;
     }
 
@@ -370,7 +367,10 @@ export class BotUxService {
       this.clearWizard(user.id);
     }
 
-    const rendered = this.renderScreen(target, user.id);
+    const rendered = this.withChannelInvite(
+      this.renderScreen(target, user.id),
+      adapter.platform,
+    );
     this.remember(user.id, rendered.screen);
 
     this.recordScreenEvent(action, user, adapter.platform);
@@ -672,12 +672,21 @@ export class BotUxService {
       case 'alert-created':
         return this.renderAlertCreated(userId, params.alertId ?? null);
 
-      case 'channel':
+      case 'channel': {
+        // Phase 6: a missing channel destination is answered with an explanation instead of a button
+        // that cannot work (§7 rule 8).
+        const url =
+          this.destinations.channelUrl('bale') ??
+          this.destinations.channelUrl('telegram');
+
         return {
           screen: 'channel',
-          text: formatChannelScreen(this.config.channelHandle),
-          keyboard: channelKeyboard(this.config.channelUrl),
+          text: url
+            ? formatChannelScreen(this.config.channelHandle)
+            : formatChannelUnavailableScreen(),
+          keyboard: channelKeyboard(url),
         };
+      }
 
       default:
         return this.expiredScreen();
@@ -711,6 +720,87 @@ export class BotUxService {
         `Could not deliver the fallback message to ${update.platform}: ${describeError(error)}`,
       );
     }
+  }
+
+  /**
+   * `/start` and `/start <payload>` (Phase 6 §6).
+   *
+   * The payload is parsed by the route registry and then handed to the *existing* feature: the same
+   * screens and the same alert wizard the menu buttons use. A payload can therefore never do anything
+   * a normal button press could not do — no shortcut around validation, permissions or confirmation.
+   */
+  private async handleStart(
+    adapter: PlatformAdapter,
+    user: User,
+    message: InboundMessage,
+  ): Promise<void> {
+    const payload = parseStartPayload(message.text);
+
+    this.events.record('start', {
+      platform: adapter.platform,
+      userId: user.id,
+    });
+
+    if (payload.kind === 'none') {
+      this.remember(user.id, 'menu');
+      await adapter.render({
+        chatId: message.chatId,
+        text: formatWelcomeScreen(),
+        keyboard: mainMenuKeyboard(),
+      });
+      return;
+    }
+
+    if (payload.kind === 'unknown') {
+      // Never execute a different feature for an unknown payload: log it (without the full user
+      // record) and show the normal menu with a short explanation.
+      this.logger.warn(
+        `Unknown start payload "${truncateForLog(payload.raw)}" from ${adapter.platform}.`,
+      );
+      this.events.record('start_unknown_payload', {
+        platform: adapter.platform,
+        userId: user.id,
+      });
+      this.remember(user.id, 'menu');
+      await adapter.render({
+        chatId: message.chatId,
+        text: `${formatUnknownStartScreen()}\n\n${formatMenuScreen()}`,
+        keyboard: menuKeyboard(),
+      });
+      return;
+    }
+
+    const route = payload.route;
+
+    this.events.record('start_route', {
+      platform: adapter.platform,
+      userId: user.id,
+      screen: screenForRoute(route) ?? 'alert-wizard',
+    });
+
+    // The alert route enters the *existing* wizard — it never creates an alert by itself (§4.2).
+    if (route === 'alert') {
+      this.startWizard(user.id, 'symbol');
+      const screen = this.renderScreen('alert-wizard', user.id);
+      await adapter.render({
+        chatId: message.chatId,
+        text: screen.text,
+        keyboard: screen.keyboard,
+      });
+      return;
+    }
+
+    const screen = this.withChannelInvite(
+      this.renderScreen(screenForRoute(route) ?? 'menu', user.id),
+      adapter.platform,
+    );
+
+    this.remember(user.id, screen.screen);
+    await adapter.render({
+      chatId: message.chatId,
+      text: screen.text,
+      keyboard: screen.keyboard,
+    });
   }
 
   // --- Phase 3: alert flows ----------------------------------------------------
@@ -1163,12 +1253,43 @@ export class BotUxService {
     callback: InboundCallback,
     screen: RenderedScreen,
   ): Promise<void> {
+    const withInvite = this.withChannelInvite(screen, adapter.platform);
+
     await adapter.render({
       chatId: callback.chatId,
-      text: screen.text,
-      keyboard: screen.keyboard,
+      text: withInvite.text,
+      keyboard: withInvite.keyboard,
       editMessageId: callback.messageId,
     });
+  }
+
+  /**
+   * Phase 6 — Bot → Channel (§5.2).
+   *
+   * One shared helper adds the channel invitation to the *market-intelligence* screens only: those are
+   * the answers where an invitation adds genuine value. It is never a universal footer, it never
+   * changes the report values, and it disappears completely when the invitation is disabled or the
+   * platform has no configured channel destination (§7 rule 8).
+   */
+  private withChannelInvite(
+    screen: RenderedScreen,
+    platform: Platform,
+  ): RenderedScreen {
+    if (!MARKET_REPORT_SCREENS.includes(screen.screen)) {
+      return screen;
+    }
+
+    const row = this.destinations.channelInviteRow(platform);
+
+    if (!row) {
+      return screen;
+    }
+
+    return {
+      ...screen,
+      text: `${screen.text}\n\n${formatChannelInviteLine()}`,
+      keyboard: [...row, ...screen.keyboard],
+    };
   }
 
   private alertFailureText(reason: string): string {
@@ -1537,6 +1658,17 @@ function joinNotes(...notes: (string | null | undefined)[]): string | null {
 
   return parts.length === 0 ? null : parts.join('\n');
 }
+
+/**
+ * Screens that may carry the channel invitation (Phase 6 §5.2) — the four market-*report* answers.
+ * The `market` hub itself is navigation, not a report, and is deliberately excluded.
+ */
+const MARKET_REPORT_SCREENS: readonly UxScreen[] = [
+  'report',
+  'report-full',
+  'movement',
+  'last-update',
+];
 
 function truncateForLog(value: string): string {
   return value.length <= 64 ? value : `${value.slice(0, 64)}…`;

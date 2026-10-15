@@ -31,6 +31,11 @@ if (!process.env.USER_DATA_FILE) {
   process.env.CHANNEL_DATA_FILE = join(directory, 'channel.json');
 }
 
+// Phase 6: a synthetic public bot username so the channel → bot CTA path is exercised end to end.
+// It is clearly a test value; the e2e suite never talks to a real platform.
+process.env.BALE_BOT_USERNAME =
+  process.env.BALE_BOT_USERNAME ?? 'atabak_e2e_bot';
+
 // Phase 5: publication retries must not slow the suite down (their *count* is what is asserted).
 process.env.CHANNEL_PUBLICATION_RETRY_DELAY_MS =
   process.env.CHANNEL_PUBLICATION_RETRY_DELAY_MS ?? '0';

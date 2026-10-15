@@ -27,6 +27,7 @@ import {
   MovementCandidate,
   RangeCandidate,
 } from './channel-policy.service';
+import { CtaPolicyService } from './cta-policy.service';
 import {
   ChannelDestination,
   ChannelPublisher,
@@ -79,6 +80,7 @@ export class ChannelEngineService implements OnModuleInit {
     private readonly store: PublicationStore,
     private readonly publisher: ChannelPublisher,
     private readonly policy: ChannelPolicyService,
+    private readonly ctaPolicy: CtaPolicyService,
     private readonly intelligence: MarketIntelligenceService,
     private readonly priceMessageBuilder: PriceMessageBuilder,
     private readonly posterService: PosterService,
@@ -87,6 +89,7 @@ export class ChannelEngineService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.store.ensureLoaded();
     this.policy.logPolicy();
+    this.ctaPolicy.logPolicy();
     this.logger.log(
       `Channel Engine ready: destinations ${this.publisher.destinationKey || 'none'} | ` +
         `history ${this.store.jobCount} job(s) | data file ${this.store.path ?? 'disabled'}`,
@@ -891,11 +894,20 @@ export class ChannelEngineService implements OnModuleInit {
         `(${text.length} chars, media ${media ? 'yes' : 'no'}).`,
     );
 
+    const cta = this.ctaPolicy.decide({
+      messageType: job.messageType,
+      subjects: job.subjects,
+      content: job.contentId ? this.store.findContent(job.contentId) : null,
+    });
+
     return {
       publicationId: job.id,
       messageType: job.messageType,
       text,
       parseMode: 'HTML',
+      // Phase 6: only the *intent* travels in the payload; the publisher turns it into the correct
+      // platform-specific URL (or omits it when that platform has no public bot username, §7 rule 8).
+      cta,
       media,
       destinationKey: this.publisher.destinationKey,
       meta,
@@ -967,6 +979,9 @@ export class ChannelEngineService implements OnModuleInit {
 
     const maxAttempts = this.config.channelPublicationMaxAttempts;
     const baseDelay = this.config.channelPublicationRetryDelayMs;
+    // Phase 6 — the CTA decision is recorded with the delivery so an operator can see *which* button
+    // (if any) went out with which message, without re-deriving the policy later.
+    const ctaRoute = payload.cta?.route ?? null;
     let record: PublicationDelivery = existing ?? {
       id: this.nextId('dlv'),
       publicationJobId: job.id,
@@ -995,6 +1010,8 @@ export class ChannelEngineService implements OnModuleInit {
         status: outcome.status,
         attemptCount: record.attemptCount + 1,
         failureCategory: outcome.failureKind,
+        // `ctaRoute` is `null` when the button could not be built for this platform (§7 rule 8).
+        ctaRoute: outcome.status === 'SENT' ? outcome.ctaRoute : ctaRoute,
         externalMessageId: outcome.messageId,
         mediaMessageId: outcome.mediaMessageId,
         mediaStatus: outcome.mediaStatus,

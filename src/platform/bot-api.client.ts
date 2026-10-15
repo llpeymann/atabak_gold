@@ -5,7 +5,8 @@ import { firstValueFrom } from 'rxjs';
 
 import { AppConfigService } from '../config/app-config.service';
 import { describeError, redactSecrets, truncate } from '../common/log-safety';
-import { PlatformFailureKind } from './platform.types';
+import { Keyboard, PlatformFailureKind } from './platform.types';
+import { toReplyMarkup } from './platform-adapter';
 import {
   isPlatform,
   InboundUpdate,
@@ -125,11 +126,17 @@ export class BotApiClient {
     platform: Platform,
     chatId: string,
     text: string,
+    keyboard?: Keyboard | null,
   ): Promise<PlatformPublishResult> {
     const response = await this.call(platform, 'sendMessage', {
       chat_id: chatId,
       text,
       parse_mode: 'HTML',
+      // Phase 6: an optional inline keyboard (the channel → bot CTA). Both platforms accept the
+      // Telegram-compatible `reply_markup` shape with `url` buttons.
+      ...(keyboard && keyboard.length > 0
+        ? { reply_markup: toReplyMarkup(keyboard) }
+        : {}),
     });
 
     return this.toPublishResult(platform, chatId, response);
@@ -145,11 +152,17 @@ export class BotApiClient {
     chatId: string,
     photoUrl: string,
     caption?: string,
+    keyboard?: Keyboard | null,
   ): Promise<PlatformPublishResult> {
     const response = await this.call(platform, 'sendPhoto', {
       chat_id: chatId,
       photo: photoUrl,
       ...(caption ? { caption, parse_mode: 'HTML' } : {}),
+      // The CTA belongs to the *primary* message of a photo publication (the caption); a long text
+      // that is sent separately carries the button itself (see ChannelPublisher).
+      ...(keyboard && keyboard.length > 0
+        ? { reply_markup: toReplyMarkup(keyboard) }
+        : {}),
     });
 
     return this.toPublishResult(platform, chatId, response);

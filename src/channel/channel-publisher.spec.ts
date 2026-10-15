@@ -7,6 +7,7 @@ import {
   PlatformCall,
 } from '../testing/test-doubles';
 import { BotApiClient } from '../platform/bot-api.client';
+import { BotDestinationService } from '../bot/destination.service';
 import {
   ChannelDestination,
   ChannelPublisher,
@@ -33,6 +34,7 @@ const payload = (
   messageType: 'EDUCATIONAL',
   text: 'متن کوتاه',
   parseMode: 'HTML',
+  cta: null,
   media: null,
   destinationKey: 'bale',
   meta: {
@@ -50,9 +52,12 @@ describe('channel publisher (§27.2)', () => {
 
   const build = (env: Record<string, string> = {}): void => {
     platform = createPlatformHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+    const config = createAppConfigService(env);
+
     publisher = new ChannelPublisher(
-      createAppConfigService(env),
+      config,
       platform.client as unknown as BotApiClient,
+      new BotDestinationService(config),
     );
   };
 
