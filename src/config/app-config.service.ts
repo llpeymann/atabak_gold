@@ -458,6 +458,88 @@ export class AppConfigService {
     return this.readNonNegativeInteger('SALES_MAX_OPEN_LEADS_PER_IDENTITY', 5);
   }
 
+  // --- Phase 10: admin system ---
+
+  /** Where audit/incident/activity/broadcast state is persisted (`null` = in-memory only). */
+  get adminDataFile(): string | null {
+    return this.optionalPath('ADMIN_DATA_FILE');
+  }
+
+  /** Owners: full rights, including confirming and starting a broadcast. */
+  get adminOwnerIds(): readonly string[] {
+    return parseAdminUserIds(this.configService.get<string>('ADMIN_OWNER_IDS'));
+  }
+
+  /**
+   * Administrators. Empty means “reuse the existing channel allow-list”, so the admin system never
+   * needs a second, divergent source of truth for who is trusted.
+   */
+  get adminUserIds(): readonly string[] {
+    return parseAdminUserIds(this.configService.get<string>('ADMIN_USER_IDS'));
+  }
+
+  /** Rows per page on the admin screens (the platform message limit is enforced on top). */
+  get adminPageSize(): number {
+    return this.readInteger('ADMIN_PAGE_SIZE', 8);
+  }
+
+  /** Largest custom report window in Tehran days; a wider request is refused, never truncated. */
+  get adminReportMaxDays(): number {
+    return this.readInteger('ADMIN_REPORT_MAX_DAYS', 90);
+  }
+
+  /** How long the per-identity activity day-set is kept. */
+  get adminActivityRetentionDays(): number {
+    return this.readInteger('ADMIN_ACTIVITY_RETENTION_DAYS', 120);
+  }
+
+  /** Hard cap on stored audit rows; `0` keeps every row (the documented default). */
+  get adminMaxAuditRecords(): number {
+    return this.readNonNegativeInteger('ADMIN_MAX_AUDIT_RECORDS', 0);
+  }
+
+  /** Retention of resolved incidents in days (`0` = never prune) and a hard cap on rows. */
+  get adminIncidentRetentionDays(): number {
+    return this.readNonNegativeInteger('ADMIN_INCIDENT_RETENTION_DAYS', 30);
+  }
+
+  get adminMaxIncidents(): number {
+    return this.readNonNegativeInteger('ADMIN_MAX_INCIDENTS', 500);
+  }
+
+  /** Master switch of the broadcast feature; `false` is the safe default. */
+  get adminBroadcastEnabled(): boolean {
+    return this.readBooleanFlag('ADMIN_BROADCAST_ENABLED', false);
+  }
+
+  get adminBroadcastBatchSize(): number {
+    return this.readInteger('ADMIN_BROADCAST_BATCH_SIZE', 20);
+  }
+
+  get adminBroadcastMinIntervalMs(): number {
+    return this.readNonNegativeInteger('ADMIN_BROADCAST_MIN_INTERVAL_MS', 100);
+  }
+
+  get adminBroadcastMaxAttempts(): number {
+    return this.readInteger('ADMIN_BROADCAST_MAX_ATTEMPTS', 2);
+  }
+
+  get adminBroadcastMaxManualRetries(): number {
+    return this.readNonNegativeInteger('ADMIN_BROADCAST_MAX_MANUAL_RETRIES', 2);
+  }
+
+  get adminBroadcastBackoffMs(): number {
+    return this.readInteger('ADMIN_BROADCAST_BACKOFF_MS', 60_000);
+  }
+
+  get adminBroadcastMaxRecipients(): number {
+    return this.readInteger('ADMIN_BROADCAST_MAX_RECIPIENTS', 500);
+  }
+
+  get adminBroadcastMaxLength(): number {
+    return this.readInteger('ADMIN_BROADCAST_MAX_LENGTH', 3_000);
+  }
+
   /** Inbound interaction switch: `false` keeps the pre-Phase-2 publish-only behaviour. */
   get botPollingEnabled(): boolean {
     return (

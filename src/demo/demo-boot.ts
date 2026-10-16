@@ -68,6 +68,9 @@ export function demoEnvProfile(): Record<string, string> {
     USER_DATA_FILE: join(DEMO_DATA_DIR, 'users.json'),
     ALERTS_DATA_FILE: join(DEMO_DATA_DIR, 'alerts.json'),
     CHANNEL_DATA_FILE: join(DEMO_DATA_DIR, 'channel.json'),
+    // Phase 10 — same rule as every other document: the admin trail (audit, incidents, activity days,
+    // broadcast jobs) lives in the scratch directory and never escapes into the repository.
+    ADMIN_DATA_FILE: join(DEMO_DATA_DIR, 'admin.json'),
 
     // --- scheduled publications stay quiet -----------------------------------
     CHANNEL_DAILY_REPORT_ENABLED: 'false',
@@ -111,6 +114,9 @@ export function prepareDemoEnvironment(): void {
 export function resetDemoData(): void {
   rmSync(DEMO_DATA_DIR, { recursive: true, force: true });
   mkdirSync(DEMO_DATA_DIR, { recursive: true });
+  // Wiping the directory the process is standing in leaves a dangling cwd: re-enter the recreated
+  // directory so every relative path resolves again.
+  process.chdir(DEMO_DATA_DIR);
 }
 
 prepareDemoEnvironment();

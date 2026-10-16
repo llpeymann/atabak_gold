@@ -203,6 +203,43 @@ const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   SALES_LEAD_RETENTION_DAYS: '0',
   // Abuse bound: how many open leads one identity may have at the same time (0 = unlimited).
   SALES_MAX_OPEN_LEADS_PER_IDENTITY: '5',
+
+  // --- Phase 10: admin system ---
+  // Where administrative state lives: audit trail, operational incidents, activity day-set and
+  // broadcast jobs/recipients (empty string keeps the admin system in memory only).
+  ADMIN_DATA_FILE: './data/admin.json',
+  // Owners (full rights, including confirming and starting a broadcast). Empty = the admin list
+  // below is promoted, so a single-owner deployment needs no second variable.
+  ADMIN_OWNER_IDS: '',
+  // Administrators (every management screen except starting a broadcast). Empty = the existing
+  // CHANNEL_ADMIN_USER_IDS allow-list is reused, exactly like SALES_ADMIN_USER_IDS.
+  ADMIN_USER_IDS: '',
+  // Rows per page on every admin list screen (the platform message limit is respected on top).
+  ADMIN_PAGE_SIZE: '8',
+  // Largest custom report window, in Tehran days (a wider request is refused, never truncated).
+  ADMIN_REPORT_MAX_DAYS: '90',
+  // How long the per-identity activity day-set is kept (the “active users” metric window bound).
+  ADMIN_ACTIVITY_RETENTION_DAYS: '120',
+  // Hard cap on stored audit rows; 0 = keep every row (the documented default).
+  ADMIN_MAX_AUDIT_RECORDS: '0',
+  // Retention of *resolved* incidents (0 = never prune) and a hard cap on stored incidents.
+  ADMIN_INCIDENT_RETENTION_DAYS: '30',
+  ADMIN_MAX_INCIDENTS: '500',
+  // Master switch of the broadcast feature. `false` (the default) is the safe state: the screens
+  // exist and explain the switch, but nothing can be sent.
+  ADMIN_BROADCAST_ENABLED: 'false',
+  // Recipients processed per worker tick (the worker runs every 10 seconds).
+  ADMIN_BROADCAST_BATCH_SIZE: '20',
+  // Minimum pause between two sends inside a tick — the platform rate limit is respected here.
+  ADMIN_BROADCAST_MIN_INTERVAL_MS: '100',
+  // Attempts per recipient, manual retries of a whole job, and the backoff used after a 429.
+  ADMIN_BROADCAST_MAX_ATTEMPTS: '2',
+  ADMIN_BROADCAST_MAX_MANUAL_RETRIES: '2',
+  ADMIN_BROADCAST_BACKOFF_MS: '60000',
+  // Upper bound on the number of recipients of one broadcast (a larger audience is refused).
+  ADMIN_BROADCAST_MAX_RECIPIENTS: '500',
+  // Longest broadcast text (chars); the platform limit is enforced on top.
+  ADMIN_BROADCAST_MAX_LENGTH: '3000',
 };
 
 const logger = new Logger('EnvironmentValidation');
@@ -911,6 +948,75 @@ export function validateEnvironment(
   // Reuses the same allow-list parser (and therefore the same accepted syntax) as the channel
   // admins, so both surfaces cannot drift apart.
   parseAdminUserIds(env.SALES_ADMIN_USER_IDS, 'SALES_ADMIN_USER_IDS');
+
+  // --- Phase 10: admin system ---
+  env.ADMIN_BROADCAST_ENABLED = readBoolean(env, 'ADMIN_BROADCAST_ENABLED');
+  env.ADMIN_PAGE_SIZE = readInteger(env, 'ADMIN_PAGE_SIZE', 3, 20);
+  env.ADMIN_REPORT_MAX_DAYS = readInteger(env, 'ADMIN_REPORT_MAX_DAYS', 1, 365);
+  env.ADMIN_ACTIVITY_RETENTION_DAYS = readInteger(
+    env,
+    'ADMIN_ACTIVITY_RETENTION_DAYS',
+    7,
+    730,
+  );
+  env.ADMIN_MAX_AUDIT_RECORDS = readInteger(
+    env,
+    'ADMIN_MAX_AUDIT_RECORDS',
+    0,
+    1_000_000,
+  );
+  env.ADMIN_INCIDENT_RETENTION_DAYS = readInteger(
+    env,
+    'ADMIN_INCIDENT_RETENTION_DAYS',
+    0,
+    3650,
+  );
+  env.ADMIN_MAX_INCIDENTS = readInteger(env, 'ADMIN_MAX_INCIDENTS', 0, 100_000);
+  env.ADMIN_BROADCAST_BATCH_SIZE = readInteger(
+    env,
+    'ADMIN_BROADCAST_BATCH_SIZE',
+    1,
+    100,
+  );
+  env.ADMIN_BROADCAST_MIN_INTERVAL_MS = readInteger(
+    env,
+    'ADMIN_BROADCAST_MIN_INTERVAL_MS',
+    0,
+    60_000,
+  );
+  env.ADMIN_BROADCAST_MAX_ATTEMPTS = readInteger(
+    env,
+    'ADMIN_BROADCAST_MAX_ATTEMPTS',
+    1,
+    10,
+  );
+  env.ADMIN_BROADCAST_MAX_MANUAL_RETRIES = readInteger(
+    env,
+    'ADMIN_BROADCAST_MAX_MANUAL_RETRIES',
+    0,
+    10,
+  );
+  env.ADMIN_BROADCAST_BACKOFF_MS = readInteger(
+    env,
+    'ADMIN_BROADCAST_BACKOFF_MS',
+    1000,
+    3_600_000,
+  );
+  env.ADMIN_BROADCAST_MAX_RECIPIENTS = readInteger(
+    env,
+    'ADMIN_BROADCAST_MAX_RECIPIENTS',
+    1,
+    100_000,
+  );
+  env.ADMIN_BROADCAST_MAX_LENGTH = readInteger(
+    env,
+    'ADMIN_BROADCAST_MAX_LENGTH',
+    1,
+    4096,
+  );
+  // The same allow-list parser as every earlier admin surface: one accepted syntax, no drift.
+  parseAdminUserIds(env.ADMIN_OWNER_IDS, 'ADMIN_OWNER_IDS');
+  parseAdminUserIds(env.ADMIN_USER_IDS, 'ADMIN_USER_IDS');
 
   // --- Phase 8: campaign tracking ---
   env.CAMPAIGN_TRACKING_ENABLED = readBoolean(env, 'CAMPAIGN_TRACKING_ENABLED');

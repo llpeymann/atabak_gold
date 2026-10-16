@@ -56,6 +56,17 @@ import { SalesNotificationService } from './sales/sales-notification.service';
 import { SalesService } from './sales/sales.service';
 import { SalesStore } from './sales/sales.store';
 import { SalesUxService } from './bot/sales/sales-ux.service';
+// Phase 10 — the admin system: one durable admin document (audit, incidents, activity days and
+// broadcast jobs), the authorization/audit/error/metrics/broadcast services over it, and the single
+// conversational admin surface. Every provider here is additive; no earlier phase is replaced.
+import { AdminStore } from './admin/admin.store';
+import { AdminAccessService } from './admin/admin-access.service';
+import { AdminAuditService } from './admin/admin-audit.service';
+import { AdminActivityService } from './admin/admin-activity.service';
+import { AdminErrorService } from './admin/admin-error.service';
+import { AdminMetricsService } from './admin/admin-metrics.service';
+import { AdminBroadcastService } from './admin/admin-broadcast.service';
+import { AdminService } from './bot/admin/admin.service';
 
 @Module({
   imports: [
@@ -133,6 +144,15 @@ import { SalesUxService } from './bot/sales/sales-ux.service';
     SalesNotificationService,
     SalesAdminService,
     SalesUxService,
+    // Phase 10 — admin system.
+    AdminStore,
+    AdminAccessService,
+    AdminAuditService,
+    AdminActivityService,
+    AdminErrorService,
+    AdminMetricsService,
+    AdminBroadcastService,
+    AdminService,
   ],
 })
 export class AppModule {}

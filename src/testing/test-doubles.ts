@@ -18,6 +18,15 @@ import { SalesNotificationService } from '../sales/sales-notification.service';
 import { SalesService } from '../sales/sales.service';
 import { SalesStore } from '../sales/sales.store';
 import { SalesUxService } from '../bot/sales/sales-ux.service';
+// Phase 10 — admin system
+import { AdminStore } from '../admin/admin.store';
+import { AdminAccessService } from '../admin/admin-access.service';
+import { AdminAuditService } from '../admin/admin-audit.service';
+import { AdminActivityService } from '../admin/admin-activity.service';
+import { AdminErrorService } from '../admin/admin-error.service';
+import { AdminMetricsService } from '../admin/admin-metrics.service';
+import { AdminBroadcastService } from '../admin/admin-broadcast.service';
+import { AdminService } from '../bot/admin/admin.service';
 import { CampaignConversionService } from '../campaigns/campaign-conversion.service';
 import { CampaignMetricsService } from '../campaigns/campaign-metrics.service';
 import { CampaignService } from '../campaigns/campaign.service';
@@ -116,6 +125,25 @@ export const DEFAULT_TEST_ENV: EnvMap = {
   CAMPAIGN_CHANNEL_JOIN_VERIFICATION: 'disabled',
   CAMPAIGN_RAW_EVENT_RETENTION_DAYS: '90',
   CAMPAIGN_MAX_RAW_EVENTS: '20000',
+  // Phase 10: in-memory admin state (no file), broadcast *off* by default — a test must opt in
+  // explicitly before anything can be sent, and no test ever reaches a live platform.
+  ADMIN_DATA_FILE: '',
+  ADMIN_OWNER_IDS: '',
+  ADMIN_USER_IDS: '',
+  ADMIN_PAGE_SIZE: '8',
+  ADMIN_REPORT_MAX_DAYS: '90',
+  ADMIN_ACTIVITY_RETENTION_DAYS: '120',
+  ADMIN_MAX_AUDIT_RECORDS: '0',
+  ADMIN_INCIDENT_RETENTION_DAYS: '30',
+  ADMIN_MAX_INCIDENTS: '500',
+  ADMIN_BROADCAST_ENABLED: 'false',
+  ADMIN_BROADCAST_BATCH_SIZE: '20',
+  ADMIN_BROADCAST_MIN_INTERVAL_MS: '0',
+  ADMIN_BROADCAST_MAX_ATTEMPTS: '2',
+  ADMIN_BROADCAST_MAX_MANUAL_RETRIES: '2',
+  ADMIN_BROADCAST_BACKOFF_MS: '60000',
+  ADMIN_BROADCAST_MAX_RECIPIENTS: '500',
+  ADMIN_BROADCAST_MAX_LENGTH: '3000',
 };
 
 export function createConfigService(overrides: EnvMap = {}): ConfigService {
@@ -999,6 +1027,193 @@ export function createCampaignHarness(
   };
 }
 
+export interface AdminHarness {
+  config: AppConfigService;
+  platform: PlatformHarness;
+  store: AdminStore;
+  access: AdminAccessService;
+  audit: AdminAuditService;
+  activity: AdminActivityService;
+  errors: AdminErrorService;
+  metrics: AdminMetricsService;
+  broadcast: AdminBroadcastService;
+  service: AdminService;
+  load: () => Promise<void>;
+}
+
+/**
+ * Phase 10 stack (admin document → authorization/audit/errors/metrics → broadcast worker → surface).
+ *
+ * Every dependency is the *real* service built the same way the application builds it: in-memory by
+ * default (`ADMIN_DATA_FILE=''`), broadcast off unless the test turns it on, and delivery through the
+ * same publisher/platform-client double the other phases use. A test therefore exercises the real
+ * authorization, the real stores and the real worker — never a bespoke stub.
+ */
+export function createAdminHarness(
+  env: EnvMap = {},
+  options: {
+    config?: AppConfigService;
+    platform?: PlatformHarness;
+    market?: MarketHarness;
+    userStore?: UserStore;
+    alertStore?: AlertStore;
+    publicationStore?: PublicationStore;
+    campaignStore?: CampaignStore;
+    salesStore?: SalesStore;
+  } = {},
+): AdminHarness {
+  const config = options.config ?? createAppConfigService(env);
+  const market =
+    options.market ??
+    createMarketHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+  const platform =
+    options.platform ??
+    createPlatformHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+  const userStore = options.userStore ?? new UserStore(config);
+  const alertStore = options.alertStore ?? new AlertStore(config);
+  const publicationStore =
+    options.publicationStore ?? new PublicationStore(config);
+  const campaignStore = options.campaignStore ?? new CampaignStore(config);
+  const salesStore = options.salesStore ?? new SalesStore(config);
+
+  // Phase 3 stack (alert service + notifications) — the *only* owner of alert state.
+  const capacity = new AlertCapacityService(config, userStore);
+  const alerts = new AlertService(
+    config,
+    alertStore,
+    market.marketState,
+    userStore,
+    capacity,
+  );
+  const alertNotifications = new AlertNotificationService(
+    config,
+    alerts,
+    alertStore,
+    platform.registry,
+    userStore,
+  );
+
+  // Phase 5/6 stack (publisher + engine) — the *only* owner of publications.
+  const destinations = new BotDestinationService(config);
+  const publisher = new ChannelPublisher(
+    config,
+    platform.client as unknown as BotApiClient,
+    destinations,
+  );
+  const engine = new ChannelEngineService(
+    config,
+    publicationStore,
+    publisher,
+    new ChannelPolicyService(config, publicationStore),
+    new CtaPolicyService(config),
+    new MarketIntelligenceService(config, market.marketState),
+    new PriceMessageBuilder(config),
+    new PosterService(config),
+  );
+
+  // Phase 8/9 stacks (campaign reporting + the sales engine the admin screens read and act through).
+  const campaignService = new CampaignService(
+    config,
+    campaignStore,
+    destinations,
+  );
+  const campaignTracking = new CampaignTrackingService(
+    config,
+    campaignStore,
+    campaignService,
+    platform.client as unknown as BotApiClient,
+  );
+  const campaignMetrics = new CampaignMetricsService(config, campaignStore);
+  const campaignConversions = new CampaignConversionService(
+    campaignStore,
+    campaignService,
+    campaignTracking,
+    userStore,
+  );
+  const salesService = new SalesService(
+    config,
+    salesStore,
+    campaignTracking,
+    campaignService,
+    campaignConversions,
+  );
+  const salesNotifications = new SalesNotificationService(
+    config,
+    salesStore,
+    salesService,
+    platform.registry,
+    userStore,
+  );
+
+  // Phase 10 itself.
+  const store = new AdminStore(config);
+  const access = new AdminAccessService(config);
+  const audit = new AdminAuditService(config, store);
+  const activity = new AdminActivityService(config, store);
+  const errors = new AdminErrorService(config, store);
+  const metrics = new AdminMetricsService(
+    config,
+    userStore,
+    activity,
+    alertStore,
+    alertNotifications,
+    publicationStore,
+    campaignStore,
+    campaignTracking,
+    salesService,
+    salesNotifications,
+    market.marketState,
+    errors,
+  );
+  const broadcast = new AdminBroadcastService(
+    config,
+    store,
+    userStore,
+    platform.registry,
+    activity,
+    audit,
+    errors,
+  );
+  const service = new AdminService(
+    config,
+    platform.registry,
+    access,
+    activity,
+    audit,
+    errors,
+    metrics,
+    broadcast,
+    userStore,
+    alertStore,
+    alerts,
+    alertNotifications,
+    publicationStore,
+    publisher,
+    engine,
+    salesService,
+    salesNotifications,
+    campaignStore,
+    campaignMetrics,
+    campaignTracking,
+  );
+
+  return {
+    config,
+    platform,
+    store,
+    access,
+    audit,
+    activity,
+    errors,
+    metrics,
+    broadcast,
+    service,
+    load: async () => {
+      await store.ensureLoaded();
+    },
+  };
+}
+
 export interface UxHarness {
   config: AppConfigService;
   platform: PlatformHarness;
@@ -1020,6 +1235,8 @@ export interface UxHarness {
   campaigns: CampaignHarness;
   /** Phase 9 — sales engine (lead store, lead lifecycle and the two bot surfaces). */
   sales: SalesHarness;
+  /** Phase 10 — admin system (document store, authorization, audit, errors, metrics, broadcast). */
+  admin: AdminHarness;
   /** Rendered platform calls of a given kind. */
   rendered: () => PlatformCall[];
   /** Newest rendered message (send or edit). */
@@ -1102,6 +1319,22 @@ export function createUxHarness(
     },
   );
 
+  // Phase 10: the admin system is wired before the UX service, which dispatches admin commands and
+  // callbacks through it (and keeps the admin row hidden from non-admins).
+  const adminStack = createAdminHarness(
+    { ...env, BOT_POLLING_ENABLED: 'false' },
+    {
+      config,
+      platform,
+      market,
+      userStore: store,
+      alertStore,
+      publicationStore: channel.store,
+      campaignStore: campaigns.store,
+      salesStore: salesStack.store,
+    },
+  );
+
   const botUx = new BotUxService(
     config,
     platform.registry,
@@ -1116,6 +1349,7 @@ export function createUxHarness(
     campaigns.admin,
     salesStack.ux,
     salesStack.admin,
+    adminStack.service,
   );
 
   const rendered = (): PlatformCall[] =>
@@ -1140,6 +1374,7 @@ export function createUxHarness(
     capacity,
     campaigns,
     sales: salesStack,
+    admin: adminStack,
     rendered,
     last: () => {
       const all = rendered();

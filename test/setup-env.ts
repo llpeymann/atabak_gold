@@ -66,3 +66,17 @@ process.env.CHANNEL_ADMIN_USER_IDS =
 // Phase 3: notify retries must be immediate in tests (the retry *count* is what is asserted).
 process.env.ALERT_NOTIFICATION_RETRY_DELAY_MS =
   process.env.ALERT_NOTIFICATION_RETRY_DELAY_MS ?? '0';
+
+// Phase 10: the admin system keeps its audit trail, incidents, activity days and broadcast jobs in
+// the same throw-away directory. Broadcast is enabled *only* for the e2e suite, with synthetic
+// recipients, so the confirmation/worker flow can be exercised without ever touching a live
+// platform; the delivery itself is asserted through recorded adapter calls.
+process.env.ADMIN_DATA_FILE =
+  process.env.ADMIN_DATA_FILE ??
+  join(process.env.ATABAK_E2E_DIR ?? tmpdir(), 'admin.json');
+process.env.ADMIN_OWNER_IDS = process.env.ADMIN_OWNER_IDS ?? 'bale:e2e-owner';
+process.env.ADMIN_USER_IDS = process.env.ADMIN_USER_IDS ?? 'bale:e2e-admin';
+process.env.ADMIN_BROADCAST_ENABLED =
+  process.env.ADMIN_BROADCAST_ENABLED ?? 'true';
+process.env.ADMIN_BROADCAST_MIN_INTERVAL_MS =
+  process.env.ADMIN_BROADCAST_MIN_INTERVAL_MS ?? '0';

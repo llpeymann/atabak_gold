@@ -74,7 +74,9 @@ export type SkipReason =
   | 'MISSED_WINDOW'
   | 'MOVEMENT_BELOW_THRESHOLD'
   | 'RANGE_EVENT_SUPPRESSED'
-  | 'TYPE_DISABLED';
+  | 'TYPE_DISABLED'
+  /** Phase 10 — the operator switched publishing off; the work item is left pending, not lost. */
+  | 'PUBLISHING_DISABLED';
 
 export interface PublicationJob {
   id: string;
@@ -276,6 +278,21 @@ export interface PersistedChannelData {
   deliveries: PublicationDelivery[];
   movementEvents: MovementEventState[];
   rangeEvents: RangeEventState[];
+  /**
+   * Phase 10 — durable operational settings.
+   *
+   * Optional on purpose: a document written before Phase 10 keeps loading, and a missing switch means
+   * “publishing enabled”, which is exactly the behaviour those deployments already had.
+   */
+  settings?: ChannelSettings;
+}
+
+export interface ChannelSettings {
+  /** `false` = the operator paused publishing; scheduled work stays pending instead of being lost. */
+  publishingEnabled: boolean;
+  /** Who changed it last and when (an operator identity, never a secret). */
+  publishingChangedBy?: string | null;
+  publishingChangedAt?: string | null;
 }
 
 // --- payload contract (§15) ---------------------------------------------------

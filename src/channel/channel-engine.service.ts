@@ -332,6 +332,16 @@ export class ChannelEngineService implements OnModuleInit {
   async schedulerTick(): Promise<void> {
     const now = new Date();
 
+    if (!this.publishingEnabled) {
+      // Paused by an operator: nothing is published and nothing is marked as missed — the work items
+      // keep waiting for the switch to come back on (§10.2 “disable through the existing service”).
+      this.logger.debug(
+        'Publishing is disabled — tick skipped, pending work left untouched.',
+      );
+
+      return;
+    }
+
     try {
       const due = await this.publishDueContent(now);
 
@@ -466,6 +476,20 @@ export class ChannelEngineService implements OnModuleInit {
     now: Date,
     inputs: ExecutionInputs = {},
   ): Promise<PublicationOutcome> {
+    if (!this.publishingEnabled) {
+      const job = this.store.findJob(jobId);
+
+      // An explicit, typed refusal instead of a silent no-op: the caller (and the audit trail) can
+      // see that the message was not sent because publishing is switched off.
+      return {
+        jobId,
+        messageType: job?.messageType ?? 'BRANDED',
+        status: 'SKIPPED',
+        skipReason: 'PUBLISHING_DISABLED',
+        deliveries: [],
+      };
+    }
+
     const claim = await this.store.transact((tx) => {
       const job = tx.findJob(jobId);
 
@@ -1167,6 +1191,32 @@ export class ChannelEngineService implements OnModuleInit {
   }
 
   // --- recovery (§11, §23) -----------------------------------------------------
+
+  /**
+   * Phase 10 — operational switch, owned by this engine and persisted in its own document.
+   *
+   * `false` pauses publishing: scheduled and event-driven work stays `PENDING` (and is therefore not
+   * lost, and not silently marked as missed) until the operator switches it back on. Nothing is
+   * written around the pipeline: the switch is stored by the same store that owns the jobs.
+   */
+  get publishingEnabled(): boolean {
+    return this.store.settings.publishingEnabled;
+  }
+
+  async setPublishingEnabled(enabled: boolean, actor?: string): Promise<void> {
+    await this.store.transact((tx) => {
+      tx.saveSettings({
+        publishingEnabled: enabled,
+        publishingChangedBy: actor ?? null,
+        publishingChangedAt: new Date().toISOString(),
+      });
+    });
+
+    this.logger.log(
+      `Publishing was ${enabled ? 'enabled' : 'disabled'} through the admin surface ` +
+        `(by ${actor ?? 'unknown'}).`,
+    );
+  }
 
   /**
    * Restart recovery.

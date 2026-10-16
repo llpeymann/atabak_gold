@@ -12,7 +12,6 @@ import { CampaignTrackingService } from './../src/campaigns/campaign-tracking.se
 import { SalesService } from './../src/sales/sales.service';
 import { SalesStore } from './../src/sales/sales.store';
 import { UserStore } from './../src/users/user.store';
-import { InboundCallback, InboundMessage } from './../src/platform/platform.types';
 
 let updateId = 0;
 
@@ -84,7 +83,7 @@ describe('Sales engine (e2e)', () => {
       chatId,
       text,
       messageId: 300 + updateId,
-    } as InboundMessage);
+    });
 
   const press = async (
     data: string,
@@ -100,7 +99,7 @@ describe('Sales engine (e2e)', () => {
       messageId: 555,
       callbackId: `cb-${updateId}`,
       data,
-    } as InboundCallback);
+    });
 
   let campaignId = '';
 
@@ -157,7 +156,9 @@ describe('Sales engine (e2e)', () => {
     const rows = campaignStore.listConversions();
 
     expect(
-      rows.filter((row) => row.type === 'LEAD' && row.identityKey === lead.identityKey),
+      rows.filter(
+        (row) => row.type === 'LEAD' && row.identityKey === lead.identityKey,
+      ),
     ).toHaveLength(1);
   });
 
@@ -165,11 +166,23 @@ describe('Sales engine (e2e)', () => {
     const lead = store.listLeads()[0];
 
     // An unauthorized visitor cannot change anything.
-    await message(`/sales status ${lead.reference} CONTACTED`, 'someone-else', 'other-chat');
+    await message(
+      `/sales status ${lead.reference} CONTACTED`,
+      'someone-else',
+      'other-chat',
+    );
     expect(sales.findLead(lead.leadId)?.status).toBe('NEW');
 
-    await message(`/sales status ${lead.reference} CONTACTED`, admin, 'admin-chat');
-    await message(`/sales status ${lead.reference} QUALIFIED`, admin, 'admin-chat');
+    await message(
+      `/sales status ${lead.reference} CONTACTED`,
+      admin,
+      'admin-chat',
+    );
+    await message(
+      `/sales status ${lead.reference} QUALIFIED`,
+      admin,
+      'admin-chat',
+    );
     expect(sales.findLead(lead.leadId)?.status).toBe('QUALIFIED');
 
     // Conversion needs the explicit confirmation button, and it writes the Phase 8 customer row.
@@ -178,22 +191,49 @@ describe('Sales engine (e2e)', () => {
 
     const customerRows = campaignStore
       .listConversions()
-      .filter((row) => row.type === 'CUSTOMER' && row.identityKey === lead.identityKey);
+      .filter(
+        (row) =>
+          row.type === 'CUSTOMER' && row.identityKey === lead.identityKey,
+      );
 
     expect(customerRows).toHaveLength(1);
     expect(customerRows[0].campaignId).toBe(campaignId);
 
-    await message(`/sales sale ${lead.reference} 120,000,000 TOMAN`, admin, 'admin-chat');
+    await message(
+      `/sales sale ${lead.reference} 120,000,000 TOMAN`,
+      admin,
+      'admin-chat',
+    );
 
     const outcome = sales.activeOutcome(lead.leadId);
 
     expect(outcome?.amount).toBe(120_000_000);
     expect(outcome?.currency).toBe('TOMAN');
     expect(outcome?.recordedBy).toBe(adminKey);
-    // A recorded sale is the only thing that counts as a sale — the request itself never did.
+    // The outcome is the *only* place a sale exists; recording it must not add a second conversion
+    // row: `ConversionType` has exactly two members (`LEAD`/`CUSTOMER`), and the lead was already
+    // converted once by the explicit confirmation above. (The previous spelling compared against a
+    // type member that does not exist — `'SALE'` — which was a permanent compile error in the dev
+    // tsconfig and made this line assert nothing at runtime.)
+    expect(outcome?.status).toBe('ACTIVE');
+
+    const conversionsAfterSale = campaignStore
+      .listConversions()
+      .filter(
+        (row) =>
+          row.identityKey === lead.identityKey && row.type === 'CUSTOMER',
+      );
+
+    // Exactly one customer conversion for this identity: the explicit confirmation wrote it, and
+    // recording the sale did not write a second one.
+    expect(conversionsAfterSale).toHaveLength(1);
+    expect(conversionsAfterSale[0].recordedBy).toBe(adminKey);
+    expect(sales.listAllOutcomes()).toHaveLength(1);
+
+    // …and the sale is what a conversion *counts as sold* — never an inferred one.
     expect(
-      campaignStore.listConversions().filter((row) => row.type === 'SALE'),
-    ).toHaveLength(0);
+      sales.listAllOutcomes().filter((row) => row.status === 'ACTIVE'),
+    ).toHaveLength(1);
   });
 
   it('keeps the request across a restart and adds a genuinely new request without merging', async () => {

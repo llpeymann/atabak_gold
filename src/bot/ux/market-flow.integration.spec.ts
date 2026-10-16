@@ -3,6 +3,7 @@ import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
 import {
   createCampaignHarness,
+  createAdminHarness,
   createSalesHarness,
 } from '../../testing/test-doubles';
 import { ContentAdminService } from '../content/content-admin.service';
@@ -139,6 +140,10 @@ describe('market flow (integration)', () => {
       campaigns.admin,
       sales.ux,
       sales.admin,
+      createAdminHarness(
+        { ...process.env, BOT_POLLING_ENABLED: 'false' },
+        { config, platform, market, userStore: store, alertStore },
+      ).service,
     );
 
     // `priceService` only exists to prove it is never used.

@@ -6,6 +6,7 @@ import { describeError } from '../common/log-safety';
 import { AppConfigService } from '../config/app-config.service';
 import { Platform } from '../platform/platform.types';
 import {
+  ChannelSettings,
   ContentItem,
   MovementEventState,
   PersistedChannelData,
@@ -50,6 +51,10 @@ export interface PublicationTransaction {
   getRangeEvent(symbol: string, dayKey: string): RangeEventState | null;
   saveRangeEvent(state: RangeEventState): void;
   listRangeEvents(): RangeEventState[];
+
+  /** Phase 10 — operational settings. A missing object means “publishing enabled”. */
+  getSettings(): ChannelSettings;
+  saveSettings(settings: ChannelSettings): void;
 }
 
 class PublicationTransactionImpl implements PublicationTransaction {
@@ -61,7 +66,19 @@ class PublicationTransactionImpl implements PublicationTransaction {
     private readonly deliveries: Map<string, PublicationDelivery>,
     private readonly movementEvents: Map<string, MovementEventState>,
     private readonly rangeEvents: Map<string, RangeEventState>,
+    private readonly settingSlots: Map<string, ChannelSettings>,
   ) {}
+
+  getSettings(): ChannelSettings {
+    const stored = this.settingSlots.get('channel');
+
+    return stored ? { ...stored } : { publishingEnabled: true };
+  }
+
+  saveSettings(settings: ChannelSettings): void {
+    this.settingSlots.set('channel', { ...settings });
+    this.changed = true;
+  }
 
   findContent(id: string): ContentItem | null {
     const content = this.contents.get(id);
@@ -190,6 +207,8 @@ export class PublicationStore {
 
   private loaded = false;
   private writeChain: Promise<void> = Promise.resolve();
+  /** Phase 10 — one durable settings slot (the only key used is `channel`). */
+  private readonly settingSlots = new Map<string, ChannelSettings>();
 
   constructor(private readonly config: AppConfigService) {
     this.filePath = this.config.channelDataFile;
@@ -202,6 +221,24 @@ export class PublicationStore {
 
   get path(): string | null {
     return this.filePath;
+  }
+
+  /**
+   * Phase 10 — the durable operational switch, read straight from the store that owns the jobs. A
+   * document written before Phase 10 has no settings object, and that means “publishing enabled”,
+   * which is exactly the behaviour those deployments already had (§15.1) — a migration never turns
+   * publishing off.
+   */
+  get settings(): ChannelSettings {
+    const stored = this.settingSlots.get('channel');
+
+    return stored
+      ? { ...stored }
+      : {
+          publishingEnabled: true,
+          publishingChangedBy: null,
+          publishingChangedAt: null,
+        };
   }
 
   async ensureLoaded(): Promise<void> {
@@ -258,6 +295,19 @@ export class PublicationStore {
         if (this.isRangeEventShape(state)) {
           this.rangeEvents.set(`${state.symbol}|${state.dayKey}`, state);
         }
+      }
+
+      // Phase 10 — the operational switch survives a restart. A document without it (every
+      // pre-Phase-10 file) means “publishing enabled”, exactly as before.
+      if (
+        parsed.settings &&
+        typeof parsed.settings.publishingEnabled === 'boolean'
+      ) {
+        this.settingSlots.set('channel', {
+          publishingEnabled: parsed.settings.publishingEnabled,
+          publishingChangedBy: parsed.settings.publishingChangedBy ?? null,
+          publishingChangedAt: parsed.settings.publishingChangedAt ?? null,
+        });
       }
 
       this.logger.log(
@@ -377,6 +427,7 @@ export class PublicationStore {
         this.deliveries,
         this.movementEvents,
         this.rangeEvents,
+        this.settingSlots,
       );
 
       const result = operation(tx);
@@ -433,6 +484,7 @@ export class PublicationStore {
       deliveries: [...this.deliveries.values()],
       movementEvents: [...this.movementEvents.values()],
       rangeEvents: [...this.rangeEvents.values()],
+      settings: this.settingSlots.get('channel') ?? { publishingEnabled: true },
     };
   }
 

@@ -137,6 +137,81 @@ export type SalesCallbackAction =
   | { kind: 'sales-lead-assign-to'; leadId: string; index: number }
   | { kind: 'sales-lead-history'; leadId: string };
 
+/**
+ * Phase 10 — administrative actions.
+ *
+ * Same security contract as every other namespace: the payload carries only an opaque internal
+ * reference (`usr_12`, `inc_3`, `bc_2`, `BC-0003`, an alert id or a lead id) or a closed token. It
+ * never carries a role, an allow-list entry, a chat id or a phone number, and every press is
+ * re-authorized server-side against the platform identity of the sender — so a forwarded or forged
+ * button can only ever ask for something, never authorize it (§12.1, §12.3).
+ */
+export type AdminCallbackAction =
+  | { kind: 'admin-hub' }
+  | {
+      kind: 'admin-stats';
+      preset: 'today' | '7d' | '30d' | 'all';
+      section: number;
+    }
+  | { kind: 'admin-stats-custom' }
+  | { kind: 'admin-dict' }
+  | { kind: 'admin-users'; filter: AdminUserFilterToken; page: number }
+  | { kind: 'admin-user'; userId: string }
+  | { kind: 'admin-user-search' }
+  | { kind: 'admin-channels' }
+  | { kind: 'admin-publishing'; op: 'enable' | 'disable'; confirmed: boolean }
+  | { kind: 'admin-test-message'; destination: number; confirmed: boolean }
+  | { kind: 'admin-channel-history' }
+  | { kind: 'admin-alerts'; filter: AdminAlertFilterToken; page: number }
+  | { kind: 'admin-alert'; alertId: string }
+  | {
+      kind: 'admin-alert-state';
+      alertId: string;
+      op: 'disable' | 'enable';
+      confirmed: boolean;
+    }
+  | { kind: 'admin-leads'; filter: AdminLeadFilterToken; page: number }
+  | { kind: 'admin-campaigns'; page: number }
+  | { kind: 'admin-campaign-funnel'; campaignId: string }
+  | { kind: 'admin-errors'; filter: AdminIncidentFilterToken; page: number }
+  | { kind: 'admin-error'; incidentId: string }
+  | {
+      kind: 'admin-error-act';
+      incidentId: string;
+      op: 'review' | 'resolve' | 'reopen';
+    }
+  | { kind: 'admin-error-retry'; incidentId: string }
+  | { kind: 'admin-broadcast' }
+  | { kind: 'admin-broadcast-list' }
+  | {
+      kind: 'admin-broadcast-audience';
+      audience: AdminAudienceToken;
+      days: number | null;
+    }
+  | { kind: 'admin-broadcast-text' }
+  | { kind: 'admin-broadcast-preview' }
+  | { kind: 'admin-broadcast-save' }
+  | { kind: 'admin-broadcast-start'; reference: string }
+  | { kind: 'admin-broadcast-cancel'; reference: string }
+  | { kind: 'admin-broadcast-retry'; reference: string }
+  | { kind: 'admin-broadcast-report'; reference: string }
+  | { kind: 'admin-audit'; page: number };
+
+export type AdminUserFilterToken =
+  'all' | 'bale' | 'telegram' | 'new' | 'inactive';
+
+export type AdminAlertFilterToken =
+  'all' | 'active' | 'disabled' | 'triggered' | 'bale' | 'telegram';
+
+export type AdminLeadFilterToken =
+  'all' | 'open' | 'converted' | 'lost' | 'today';
+
+export type AdminIncidentFilterToken =
+  'open' | 'reviewed' | 'resolved' | 'all' | 'retryable' | 'retryable-open';
+
+export type AdminAudienceToken =
+  'all' | 'bale' | 'telegram' | 'active' | 'inactive';
+
 export type CallbackAction =
   | { kind: 'menu' }
   | { kind: 'home' }
@@ -148,7 +223,8 @@ export type CallbackAction =
   | AlertCallbackAction
   | ContentCallbackAction
   | CampaignCallbackAction
-  | SalesCallbackAction;
+  | SalesCallbackAction
+  | AdminCallbackAction;
 
 /** Symbols are uppercase registry ids; anything else is rejected before touching the store. */
 const SYMBOL_PATTERN = /^[A-Z0-9_]{1,32}$/;
@@ -370,6 +446,527 @@ export function callbackDataForSalesLeadHistory(leadId: string): string {
 }
 
 /** Campaign ids are generated internally (`cmp_<n>`); this is the shape a callback may carry. */
+// --- Phase 10: admin namespace (`v1:admin:*`) -----------------------------------
+
+const ADMIN_USER_FILTERS: readonly AdminUserFilterToken[] = [
+  'all',
+  'bale',
+  'telegram',
+  'new',
+  'inactive',
+];
+const ADMIN_ALERT_FILTERS: readonly AdminAlertFilterToken[] = [
+  'all',
+  'active',
+  'disabled',
+  'triggered',
+  'bale',
+  'telegram',
+];
+const ADMIN_LEAD_FILTERS: readonly AdminLeadFilterToken[] = [
+  'all',
+  'open',
+  'converted',
+  'lost',
+  'today',
+];
+const ADMIN_INCIDENT_FILTERS: readonly AdminIncidentFilterToken[] = [
+  'open',
+  'reviewed',
+  'resolved',
+  'all',
+  'retryable',
+  'retryable-open',
+];
+const ADMIN_AUDIENCES: readonly AdminAudienceToken[] = [
+  'all',
+  'bale',
+  'telegram',
+  'active',
+  'inactive',
+];
+const ADMIN_PERIODS: readonly ('today' | '7d' | '30d' | 'all')[] = [
+  'today',
+  '7d',
+  '30d',
+  'all',
+];
+
+/** Internal ids produced by the project's own stores (`usr_12`, `inc_3`, `bc_2`, …). */
+const INTERNAL_ID_PATTERN = /^[a-z]{2,6}_[0-9]{1,12}$/u;
+/** Broadcast reference shown to the operator (`BC-0003`). */
+const BROADCAST_REFERENCE_PATTERN = /^BC-[0-9]{1,8}$/u;
+
+export function isSafeInternalId(value: string): boolean {
+  return INTERNAL_ID_PATTERN.test(value);
+}
+
+export function isSafeBroadcastReference(value: string): boolean {
+  return BROADCAST_REFERENCE_PATTERN.test(value);
+}
+
+export function callbackDataForAdminHub(): string {
+  return `${CALLBACK_VERSION}:admin:hub`;
+}
+
+export function callbackDataForAdminStats(
+  preset: 'today' | '7d' | '30d' | 'all',
+  section = 0,
+): string {
+  return `${CALLBACK_VERSION}:admin:stats:${preset}:${section}`;
+}
+
+export function callbackDataForAdminStatsCustom(): string {
+  return `${CALLBACK_VERSION}:admin:stats:custom`;
+}
+
+export function callbackDataForAdminDictionary(): string {
+  return `${CALLBACK_VERSION}:admin:dict`;
+}
+
+export function callbackDataForAdminUsers(
+  filter: AdminUserFilterToken,
+  page: number,
+): string {
+  return `${CALLBACK_VERSION}:admin:users:${filter}:${page}`;
+}
+
+export function callbackDataForAdminUser(userId: string): string {
+  return `${CALLBACK_VERSION}:admin:user:${userId}`;
+}
+
+export function callbackDataForAdminUserSearch(): string {
+  return `${CALLBACK_VERSION}:admin:usearch`;
+}
+
+export function callbackDataForAdminChannels(): string {
+  return `${CALLBACK_VERSION}:admin:channels`;
+}
+
+export function callbackDataForAdminPublishing(
+  op: 'enable' | 'disable',
+  confirmed = false,
+): string {
+  return `${CALLBACK_VERSION}:admin:pub:${op}${confirmed ? ':yes' : ''}`;
+}
+
+export function callbackDataForAdminTestMessage(
+  destination: number,
+  confirmed = false,
+): string {
+  return `${CALLBACK_VERSION}:admin:test:${destination}${
+    confirmed ? ':yes' : ''
+  }`;
+}
+
+export function callbackDataForAdminChannelHistory(): string {
+  return `${CALLBACK_VERSION}:admin:pubhist`;
+}
+
+export function callbackDataForAdminAlerts(
+  filter: AdminAlertFilterToken,
+  page: number,
+): string {
+  return `${CALLBACK_VERSION}:admin:alerts:${filter}:${page}`;
+}
+
+export function callbackDataForAdminAlert(alertId: string): string {
+  return `${CALLBACK_VERSION}:admin:alert:${alertId}`;
+}
+
+export function callbackDataForAdminAlertState(
+  alertId: string,
+  op: 'disable' | 'enable',
+  confirmed = false,
+): string {
+  return `${CALLBACK_VERSION}:admin:alertset:${alertId}:${op}${
+    confirmed ? ':yes' : ''
+  }`;
+}
+
+export function callbackDataForAdminLeads(
+  filter: AdminLeadFilterToken,
+  page: number,
+): string {
+  return `${CALLBACK_VERSION}:admin:leads:${filter}:${page}`;
+}
+
+export function callbackDataForAdminCampaigns(page: number): string {
+  return `${CALLBACK_VERSION}:admin:campaigns:${page}`;
+}
+
+export function callbackDataForAdminCampaignFunnel(campaignId: string): string {
+  return `${CALLBACK_VERSION}:admin:cfunnel:${campaignId}`;
+}
+
+export function callbackDataForAdminErrors(
+  filter: AdminIncidentFilterToken,
+  page: number,
+): string {
+  return `${CALLBACK_VERSION}:admin:errors:${filter}:${page}`;
+}
+
+export function callbackDataForAdminError(incidentId: string): string {
+  return `${CALLBACK_VERSION}:admin:error:${incidentId}`;
+}
+
+export function callbackDataForAdminErrorAct(
+  incidentId: string,
+  op: 'review' | 'resolve' | 'reopen',
+): string {
+  return `${CALLBACK_VERSION}:admin:erract:${incidentId}:${op}`;
+}
+
+export function callbackDataForAdminErrorRetry(incidentId: string): string {
+  return `${CALLBACK_VERSION}:admin:errretry:${incidentId}`;
+}
+
+export function callbackDataForAdminBroadcast(): string {
+  return `${CALLBACK_VERSION}:admin:broadcast`;
+}
+
+export function callbackDataForAdminBroadcastList(): string {
+  return `${CALLBACK_VERSION}:admin:bclist`;
+}
+
+export function callbackDataForAdminBroadcastAudience(
+  audience: AdminAudienceToken,
+  days: number | null = null,
+): string {
+  return `${CALLBACK_VERSION}:admin:bcaud:${audience}${
+    days === null ? '' : `:${days}`
+  }`;
+}
+
+export function callbackDataForAdminBroadcastText(): string {
+  return `${CALLBACK_VERSION}:admin:bctext`;
+}
+
+export function callbackDataForAdminBroadcastPreview(): string {
+  return `${CALLBACK_VERSION}:admin:bcprev`;
+}
+
+export function callbackDataForAdminBroadcastSave(): string {
+  return `${CALLBACK_VERSION}:admin:bcsave`;
+}
+
+export function callbackDataForAdminBroadcastStart(reference: string): string {
+  return `${CALLBACK_VERSION}:admin:bcgo:${reference}`;
+}
+
+export function callbackDataForAdminBroadcastCancel(reference: string): string {
+  return `${CALLBACK_VERSION}:admin:bccancel:${reference}`;
+}
+
+export function callbackDataForAdminBroadcastRetry(reference: string): string {
+  return `${CALLBACK_VERSION}:admin:bcretry:${reference}`;
+}
+
+export function callbackDataForAdminBroadcastReport(reference: string): string {
+  return `${CALLBACK_VERSION}:admin:bcreport:${reference}`;
+}
+
+export function callbackDataForAdminAudit(page: number): string {
+  return `${CALLBACK_VERSION}:admin:audit:${page}`;
+}
+
+/**
+ * Parse an administrative action. Everything is validated here (closed token lists, id formats,
+ * bounded page numbers) *before* it can reach the admin service, exactly like the other namespaces:
+ * an out-of-shape payload is simply an expired callback (§12.1).
+ */
+function parseAdminAction(tail: readonly string[]): CallbackAction | null {
+  const [head, ...rest] = tail;
+
+  switch (head) {
+    case 'hub':
+      return rest.length === 0 ? { kind: 'admin-hub' } : null;
+    case 'dict':
+      return rest.length === 0 ? { kind: 'admin-dict' } : null;
+    case 'stats': {
+      const [preset, ...extra] = rest;
+
+      if (preset === 'custom' && extra.length === 0) {
+        return { kind: 'admin-stats-custom' };
+      }
+
+      const section = extra.length === 0 ? 0 : Number(extra[0]);
+
+      return extra.length <= 1 &&
+        preset !== undefined &&
+        (ADMIN_PERIODS as readonly string[]).includes(preset) &&
+        Number.isInteger(section) &&
+        section >= 0 &&
+        section <= 9
+        ? {
+            kind: 'admin-stats',
+            preset: preset as 'today' | '7d' | '30d' | 'all',
+            section,
+          }
+        : null;
+    }
+    case 'users': {
+      const [filter, page, ...extra] = rest;
+      const parsed = Number(page);
+
+      return extra.length === 0 &&
+        filter !== undefined &&
+        (ADMIN_USER_FILTERS as readonly string[]).includes(filter) &&
+        Number.isInteger(parsed) &&
+        parsed >= 1
+        ? {
+            kind: 'admin-users',
+            filter: filter as AdminUserFilterToken,
+            page: parsed,
+          }
+        : null;
+    }
+    case 'user': {
+      const [userId, ...extra] = rest;
+
+      return extra.length === 0 &&
+        userId !== undefined &&
+        isSafeInternalId(userId)
+        ? { kind: 'admin-user', userId }
+        : null;
+    }
+    case 'usearch':
+      return rest.length === 0 ? { kind: 'admin-user-search' } : null;
+    case 'channels':
+      return rest.length === 0 ? { kind: 'admin-channels' } : null;
+    case 'pubhist':
+      return rest.length === 0 ? { kind: 'admin-channel-history' } : null;
+    case 'pub': {
+      const [op, ...extra] = rest;
+
+      if (op !== 'enable' && op !== 'disable') {
+        return null;
+      }
+
+      const confirmed = extra.length === 1 && extra[0] === 'yes';
+
+      return extra.length <= 1 && (extra.length === 0 || confirmed)
+        ? { kind: 'admin-publishing', op, confirmed }
+        : null;
+    }
+    case 'test': {
+      const [destination, ...extra] = rest;
+      const parsed = Number(destination);
+
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 9) {
+        return null;
+      }
+
+      const confirmed = extra.length === 1 && extra[0] === 'yes';
+
+      return extra.length <= 1 && (extra.length === 0 || confirmed)
+        ? { kind: 'admin-test-message', destination: parsed, confirmed }
+        : null;
+    }
+    case 'alerts': {
+      const [filter, page, ...extra] = rest;
+      const parsed = Number(page);
+
+      return extra.length === 0 &&
+        filter !== undefined &&
+        (ADMIN_ALERT_FILTERS as readonly string[]).includes(filter) &&
+        Number.isInteger(parsed) &&
+        parsed >= 1
+        ? {
+            kind: 'admin-alerts',
+            filter: filter as AdminAlertFilterToken,
+            page: parsed,
+          }
+        : null;
+    }
+    case 'alert': {
+      const [alertId, ...extra] = rest;
+
+      return extra.length === 0 &&
+        alertId !== undefined &&
+        isSafeAlertId(alertId)
+        ? { kind: 'admin-alert', alertId }
+        : null;
+    }
+    case 'alertset': {
+      const [alertId, op, ...extra] = rest;
+
+      if (
+        alertId === undefined ||
+        !isSafeAlertId(alertId) ||
+        (op !== 'disable' && op !== 'enable')
+      ) {
+        return null;
+      }
+
+      const confirmed = extra.length === 1 && extra[0] === 'yes';
+
+      return extra.length <= 1 && (extra.length === 0 || confirmed)
+        ? { kind: 'admin-alert-state', alertId, op, confirmed }
+        : null;
+    }
+    case 'leads': {
+      const [filter, page, ...extra] = rest;
+      const parsed = Number(page);
+
+      return extra.length === 0 &&
+        filter !== undefined &&
+        (ADMIN_LEAD_FILTERS as readonly string[]).includes(filter) &&
+        Number.isInteger(parsed) &&
+        parsed >= 1
+        ? {
+            kind: 'admin-leads',
+            filter: filter as AdminLeadFilterToken,
+            page: parsed,
+          }
+        : null;
+    }
+    case 'campaigns': {
+      const [page, ...extra] = rest;
+      const parsed = Number(page);
+
+      return extra.length === 0 && Number.isInteger(parsed) && parsed >= 1
+        ? { kind: 'admin-campaigns', page: parsed }
+        : null;
+    }
+    case 'cfunnel': {
+      const [campaignId, ...extra] = rest;
+
+      return extra.length === 0 &&
+        campaignId !== undefined &&
+        isSafeCampaignId(campaignId)
+        ? { kind: 'admin-campaign-funnel', campaignId }
+        : null;
+    }
+    case 'errors': {
+      const [filter, page, ...extra] = rest;
+      const parsed = Number(page);
+
+      return extra.length === 0 &&
+        filter !== undefined &&
+        (ADMIN_INCIDENT_FILTERS as readonly string[]).includes(filter) &&
+        Number.isInteger(parsed) &&
+        parsed >= 1
+        ? {
+            kind: 'admin-errors',
+            filter: filter as AdminIncidentFilterToken,
+            page: parsed,
+          }
+        : null;
+    }
+    case 'error': {
+      const [incidentId, ...extra] = rest;
+
+      return extra.length === 0 &&
+        incidentId !== undefined &&
+        isSafeInternalId(incidentId)
+        ? { kind: 'admin-error', incidentId }
+        : null;
+    }
+    case 'erract': {
+      const [incidentId, op, ...extra] = rest;
+
+      if (
+        incidentId === undefined ||
+        !isSafeInternalId(incidentId) ||
+        (op !== 'review' && op !== 'resolve' && op !== 'reopen')
+      ) {
+        return null;
+      }
+
+      return extra.length === 0
+        ? { kind: 'admin-error-act', incidentId, op }
+        : null;
+    }
+    case 'errretry': {
+      const [incidentId, ...extra] = rest;
+
+      return extra.length === 0 &&
+        incidentId !== undefined &&
+        isSafeInternalId(incidentId)
+        ? { kind: 'admin-error-retry', incidentId }
+        : null;
+    }
+    case 'broadcast':
+      return rest.length === 0 ? { kind: 'admin-broadcast' } : null;
+    case 'bclist':
+      return rest.length === 0 ? { kind: 'admin-broadcast-list' } : null;
+    case 'bcaud': {
+      const [audience, days, ...extra] = rest;
+
+      if (
+        audience === undefined ||
+        !(ADMIN_AUDIENCES as readonly string[]).includes(audience)
+      ) {
+        return null;
+      }
+
+      if (extra.length > 0) {
+        return null;
+      }
+
+      if (days === undefined) {
+        return {
+          kind: 'admin-broadcast-audience',
+          audience: audience as AdminAudienceToken,
+          days: null,
+        };
+      }
+
+      const parsed = Number(days);
+
+      return Number.isInteger(parsed) && parsed >= 1 && parsed <= 365
+        ? {
+            kind: 'admin-broadcast-audience',
+            audience: audience as AdminAudienceToken,
+            days: parsed,
+          }
+        : null;
+    }
+    case 'bctext':
+      return rest.length === 0 ? { kind: 'admin-broadcast-text' } : null;
+    case 'bcprev':
+      return rest.length === 0 ? { kind: 'admin-broadcast-preview' } : null;
+    case 'bcsave':
+      return rest.length === 0 ? { kind: 'admin-broadcast-save' } : null;
+    case 'bcgo':
+    case 'bccancel':
+    case 'bcretry':
+    case 'bcreport': {
+      const [reference, ...extra] = rest;
+
+      if (
+        extra.length > 0 ||
+        reference === undefined ||
+        !isSafeBroadcastReference(reference)
+      ) {
+        return null;
+      }
+
+      switch (head) {
+        case 'bcgo':
+          return { kind: 'admin-broadcast-start', reference };
+        case 'bccancel':
+          return { kind: 'admin-broadcast-cancel', reference };
+        case 'bcretry':
+          return { kind: 'admin-broadcast-retry', reference };
+        default:
+          return { kind: 'admin-broadcast-report', reference };
+      }
+    }
+    case 'audit': {
+      const [page, ...extra] = rest;
+      const parsed = Number(page);
+
+      return extra.length === 0 && Number.isInteger(parsed) && parsed >= 1
+        ? { kind: 'admin-audit', page: parsed }
+        : null;
+    }
+    default:
+      return null;
+  }
+}
+
 export function isSafeCampaignId(value: string): boolean {
   return /^cmp_\d{1,10}$/.test(value);
 }
@@ -775,6 +1372,9 @@ export function parseCallbackData(
     case 'salesadm': {
       return parseSalesAdminAction(tail);
     }
+    case 'admin': {
+      return parseAdminAction(tail);
+    }
     case 'fav': {
       const [op, ...extra] = tail;
 
@@ -797,6 +1397,48 @@ export function parseCallbackData(
     default:
       return null;
   }
+}
+
+const ADMIN_ACTION_KINDS: readonly AdminCallbackAction['kind'][] = [
+  'admin-hub',
+  'admin-stats',
+  'admin-stats-custom',
+  'admin-dict',
+  'admin-users',
+  'admin-user',
+  'admin-user-search',
+  'admin-channels',
+  'admin-publishing',
+  'admin-test-message',
+  'admin-channel-history',
+  'admin-alerts',
+  'admin-alert',
+  'admin-alert-state',
+  'admin-leads',
+  'admin-campaigns',
+  'admin-campaign-funnel',
+  'admin-errors',
+  'admin-error',
+  'admin-error-act',
+  'admin-error-retry',
+  'admin-broadcast',
+  'admin-broadcast-list',
+  'admin-broadcast-audience',
+  'admin-broadcast-text',
+  'admin-broadcast-preview',
+  'admin-broadcast-save',
+  'admin-broadcast-start',
+  'admin-broadcast-cancel',
+  'admin-broadcast-retry',
+  'admin-broadcast-report',
+  'admin-audit',
+];
+
+/** Narrow a parsed callback to an administrative action (used by the router's dispatch). */
+export function isAdminAction(
+  action: CallbackAction,
+): action is AdminCallbackAction {
+  return (ADMIN_ACTION_KINDS as readonly string[]).includes(action.kind);
 }
 
 const SALES_ACTION_KINDS: readonly SalesCallbackAction['kind'][] = [

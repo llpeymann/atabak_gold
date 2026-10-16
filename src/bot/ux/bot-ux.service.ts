@@ -22,12 +22,14 @@ import {
   isContentAction,
   isSalesAction,
   isSalesAdminAction,
+  isAdminAction,
   parseCallbackData,
   ScreenKey,
 } from './callback-data';
 import { ContentAdminService } from '../content/content-admin.service';
 import { CampaignAdminService } from '../campaign/campaign-admin.service';
 import { SalesAdminService } from '../sales/sales-admin.service';
+import { AdminService } from '../admin/admin.service';
 import { SalesUxService } from '../sales/sales-ux.service';
 import { CampaignTrackingService } from '../../campaigns/campaign-tracking.service';
 import { BotDestinationService } from '../destination.service';
@@ -216,6 +218,9 @@ export class BotUxService {
     // constructor position.
     private readonly salesUx: SalesUxService,
     private readonly salesAdmin: SalesAdminService,
+    // Phase 10 — the administrative surface. Appended last, exactly like the Phase 8/9 pairs, so
+    // every earlier phase keeps its constructor position.
+    private readonly admin: AdminService,
   ) {}
 
   /** Entry point used by the inbound poller (and by tests). Never throws for bad input. */
@@ -349,6 +354,15 @@ export class BotUxService {
       // real user action. Automated deliveries, scheduled publications and rejected payloads never
       // reach this line, which is what keeps the active-member metric meaningful (§1.2).
       await this.growth.touchActivity(user.id);
+
+      // Phase 10 — the same rule, written down durably for the admin dashboard: “active user” means a
+      // real person interacted with the bot, so this is the *only* writer of the activity day-set
+      // (§14). Publishers, schedulers and notification workers never reach this line.
+      await this.admin.recordUserAction({
+        platform: update.platform,
+        platformUserId: update.platformUserId,
+        userId: user.id,
+      });
     } catch (error) {
       // The user gets a safe message; the technical detail stays server-side (§24, §49).
       this.logger.error(
@@ -451,6 +465,9 @@ export class BotUxService {
       await adapter.render({
         chatId: notice.chatId,
         text: formatRewardGrantedNotice(notice),
+        // Only the inviter's *internal* id is known here (no platform identity), so this single
+        // keyboard deliberately omits the admin row: the surface is reachable from every normal menu
+        // and is never authorized by a button anyway (§12.3).
         keyboard: mainMenuKeyboard({
           referral: this.growth.enabled,
           sales: this.salesUx.enabled,
@@ -501,6 +518,13 @@ export class BotUxService {
 
     if (textIsCommand) {
       this.salesAdmin.clearPending(user.id);
+      this.admin.clearPending(user.id);
+    } else if (
+      message.text !== null &&
+      this.admin.hasPendingInput(user.id) &&
+      (await this.admin.consumeInput(adapter, user, message.text))
+    ) {
+      return;
     } else if (
       message.text !== null &&
       this.salesAdmin.hasPendingInput(user.id) &&
@@ -525,10 +549,7 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: menuKeyboard({
-          referral: this.growth.enabled,
-          sales: this.salesUx.enabled,
-        }),
+        keyboard: menuKeyboard(this.menuOptions(user, adapter.platform)),
       });
       return;
     }
@@ -584,10 +605,30 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: mainMenuKeyboard({
-          referral: this.growth.enabled,
-          sales: this.salesUx.enabled,
-        }),
+        keyboard: mainMenuKeyboard(this.menuOptions(user, adapter.platform)),
+      });
+      return;
+    }
+
+    // Phase 10 — the administrative surface. Admin-gated server-side; a non-admin sees the ordinary
+    // menu and the existence of the surface is not disclosed (§12.1). A refused command returns
+    // `false`, and the normal menu is rendered below.
+    if (this.admin.owns(message.text ?? '')) {
+      const handled = await this.admin.handleCommand(
+        adapter,
+        user,
+        message.text ?? '',
+      );
+
+      if (handled) {
+        return;
+      }
+
+      this.remember(user.id, 'menu');
+      await adapter.render({
+        chatId: message.chatId,
+        text: formatMenuScreen(),
+        keyboard: menuKeyboard(this.menuOptions(user, adapter.platform)),
       });
       return;
     }
@@ -609,10 +650,7 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: mainMenuKeyboard({
-          referral: this.growth.enabled,
-          sales: this.salesUx.enabled,
-        }),
+        keyboard: mainMenuKeyboard(this.menuOptions(user, adapter.platform)),
       });
       return;
     }
@@ -634,10 +672,7 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: mainMenuKeyboard({
-          referral: this.growth.enabled,
-          sales: this.salesUx.enabled,
-        }),
+        keyboard: mainMenuKeyboard(this.menuOptions(user, adapter.platform)),
       });
       return;
     }
@@ -652,10 +687,7 @@ export class BotUxService {
     await adapter.render({
       chatId: message.chatId,
       text: formatMenuScreen(),
-      keyboard: menuKeyboard({
-        referral: this.growth.enabled,
-        sales: this.salesUx.enabled,
-      }),
+      keyboard: menuKeyboard(this.menuOptions(user, adapter.platform)),
     });
   }
 
@@ -717,6 +749,21 @@ export class BotUxService {
         user,
         callback.callbackId,
         messageId,
+        action,
+      );
+      return;
+    }
+
+    // Phase 10 — the administrative surface answers its own buttons (its toasts differ per action),
+    // and it re-authorizes every press server-side, so a forged or forwarded button cannot reach any
+    // data. Dispatched before the generic acknowledgement: exactly one answer per callback.
+    if (action && isAdminAction(action)) {
+      this.clearWizard(user.id);
+      await this.admin.handleCallback(
+        adapter,
+        user,
+        callback.callbackId,
+        typeof callback.messageId === 'number' ? callback.messageId : undefined,
         action,
       );
       return;
@@ -974,6 +1021,9 @@ export class BotUxService {
         return {
           screen: 'menu',
           text: formatMenuScreen(),
+          // `renderScreen` has no sender in scope, so this particular menu is rendered without the
+          // admin row. The row is present on every menu that is rendered *for* a resolved sender
+          // (`/start`, `/menu`, navigation), which is the path an administrator actually uses.
           keyboard: menuKeyboard({
             referral: this.growth.enabled,
             sales: this.salesUx.enabled,
@@ -1167,6 +1217,26 @@ export class BotUxService {
     }
   }
 
+  /**
+   * Menu options of the *current sender*.
+   *
+   * The admin row is rendered only when the server already resolved this platform identity as an
+   * administrator — the button is a convenience, the authorization happens again on every press
+   * (§12.3). Everything else keeps its Phase 2–9 behaviour untouched.
+   */
+  private menuOptions(
+    user: User,
+    platform: Platform,
+  ): { referral: boolean; sales: boolean; admin: boolean } {
+    return {
+      referral: this.growth.enabled,
+      sales: this.salesUx.enabled,
+      admin:
+        this.admin.enabled &&
+        this.admin.roleOf(platform, user.platformUserId) !== null,
+    };
+  }
+
   private expiredScreen(): RenderedScreen {
     return {
       screen: 'expired',
@@ -1220,10 +1290,7 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatWelcomeScreen(),
-        keyboard: mainMenuKeyboard({
-          referral: this.growth.enabled,
-          sales: this.salesUx.enabled,
-        }),
+        keyboard: mainMenuKeyboard(this.menuOptions(user, adapter.platform)),
       });
       return;
     }
@@ -1242,10 +1309,7 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: `${formatUnknownStartScreen()}\n\n${formatMenuScreen()}`,
-        keyboard: menuKeyboard({
-          referral: this.growth.enabled,
-          sales: this.salesUx.enabled,
-        }),
+        keyboard: menuKeyboard(this.menuOptions(user, adapter.platform)),
       });
       return;
     }
@@ -1264,10 +1328,7 @@ export class BotUxService {
         text: note
           ? `${formatReferralWelcomeNote(note)}\n\n${formatWelcomeScreen()}`
           : formatWelcomeScreen(),
-        keyboard: mainMenuKeyboard({
-          referral: this.growth.enabled,
-          sales: this.salesUx.enabled,
-        }),
+        keyboard: mainMenuKeyboard(this.menuOptions(user, adapter.platform)),
       });
       return;
     }
@@ -1292,10 +1353,7 @@ export class BotUxService {
         await adapter.render({
           chatId: message.chatId,
           text: `${formatCampaignUnavailableScreen()}\n\n${formatMenuScreen()}`,
-          keyboard: menuKeyboard({
-            referral: this.growth.enabled,
-            sales: this.salesUx.enabled,
-          }),
+          keyboard: menuKeyboard(this.menuOptions(user, adapter.platform)),
         });
         return;
       }

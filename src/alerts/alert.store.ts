@@ -131,6 +131,19 @@ export class AlertStore {
 
   // --- reads (no critical section needed) -------------------------------------
 
+  /**
+   * Every stored alert (newest first).
+   *
+   * Phase 10 added this read-only view because the admin surface has to look at all alerts at once
+   * (its own filters and pagination). It is a plain store read — no filtering logic is duplicated
+   * from Phase 3, and no write path is added.
+   */
+  listAlerts(): Alert[] {
+    return [...this.alerts.values()]
+      .map((alert) => ({ ...alert }))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
   findAlert(alertId: string): Alert | null {
     const alert = this.alerts.get(alertId);
 

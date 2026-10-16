@@ -11,6 +11,7 @@ import {
   callbackDataForAlertStatus,
   callbackDataForAlertSymbol,
   callbackDataForAlertType,
+  callbackDataForAdminHub,
   callbackDataForAlertView,
   callbackDataForBack,
   callbackDataForFavorite,
@@ -42,7 +43,7 @@ const SECTION_EMOJI: Record<string, string> = {
  * the entry point is *inside* the existing menu, never a second menu or a replacement of one (§9.1).
  */
 export function mainMenuKeyboard(
-  options: { referral?: boolean; sales?: boolean } = {},
+  options: { referral?: boolean; sales?: boolean; admin?: boolean } = {},
 ): Keyboard {
   return [
     [{ text: '💰 قیمت لحظهای', callbackData: callbackDataForScreen('prices') }],
@@ -88,6 +89,13 @@ export function mainMenuKeyboard(
         callbackData: callbackDataForScreen('channel'),
       },
     ],
+    // Phase 10 — the administrative hub. It is appended (never inserted), so every earlier row keeps
+    // its position, and it is rendered **only** for a sender the server already resolved as an
+    // administrator: a regular user never sees the surface, and a forwarded button still gets
+    // re-authorized server-side before anything happens (§12).
+    ...(options.admin
+      ? [[{ text: '⚙️ مدیریت', callbackData: callbackDataForAdminHub() }]]
+      : []),
   ];
 }
 
@@ -177,6 +185,7 @@ export function menuKeyboard(
   options: {
     referral?: boolean;
     sales?: boolean;
+    admin?: boolean;
   } = {},
 ): Keyboard {
   return [
