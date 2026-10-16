@@ -181,6 +181,28 @@ const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   CAMPAIGN_RAW_EVENT_RETENTION_DAYS: '90',
   // Upper bound on retained raw click events per campaign (0 = no cap).
   CAMPAIGN_MAX_RAW_EVENTS: '20000',
+
+  // --- Phase 9: sales engine ---
+  // Master switch. `false` = no purchase entry, no new lead, no admin surface; every stored lead
+  // stays readable (nothing is erased).
+  SALES_ENGINE_ENABLED: 'true',
+  // Where leads, their activity history, sales outcomes and notification state are persisted
+  // (empty string keeps the Sales Engine in memory only).
+  SALES_DATA_FILE: './data/sales.json',
+  // Dedicated sales administrators. Empty = the existing CHANNEL_ADMIN_USER_IDS allow-list is used,
+  // so a deployment needs no second configuration to work.
+  SALES_ADMIN_USER_IDS: '',
+  // Lifetime of an unfinished purchase form (the customer is asked to start again afterwards).
+  SALES_FORM_TTL_MINUTES: '30',
+  // Maximum delivery attempts for one notification (admin and customer), 1 = no retry.
+  SALES_NOTIFICATION_MAX_ATTEMPTS: '3',
+  // Base delay between notification attempts (linear backoff, bounded by the attempt limit).
+  SALES_NOTIFICATION_RETRY_DELAY_MS: '5000',
+  // Retention of *leads they are tied to*: 0 = never delete a lead automatically (the documented
+  // default policy). A positive value only ever removes leads in a terminal status.
+  SALES_LEAD_RETENTION_DAYS: '0',
+  // Abuse bound: how many open leads one identity may have at the same time (0 = unlimited).
+  SALES_MAX_OPEN_LEADS_PER_IDENTITY: '5',
 };
 
 const logger = new Logger('EnvironmentValidation');
@@ -569,6 +591,38 @@ function validateReferralThresholds(env: Record<string, unknown>): void {
     1,
     10_000,
   );
+  // --- Phase 9: sales engine ---
+  env.SALES_FORM_TTL_MINUTES = readInteger(
+    env,
+    'SALES_FORM_TTL_MINUTES',
+    1,
+    1_440,
+  );
+  env.SALES_NOTIFICATION_MAX_ATTEMPTS = readInteger(
+    env,
+    'SALES_NOTIFICATION_MAX_ATTEMPTS',
+    1,
+    10,
+  );
+  env.SALES_NOTIFICATION_RETRY_DELAY_MS = readInteger(
+    env,
+    'SALES_NOTIFICATION_RETRY_DELAY_MS',
+    0,
+    600_000,
+  );
+  env.SALES_LEAD_RETENTION_DAYS = readInteger(
+    env,
+    'SALES_LEAD_RETENTION_DAYS',
+    0,
+    36_500,
+  );
+  env.SALES_MAX_OPEN_LEADS_PER_IDENTITY = readInteger(
+    env,
+    'SALES_MAX_OPEN_LEADS_PER_IDENTITY',
+    0,
+    100,
+  );
+
   // --- Phase 8: campaign tracking ---
   env.CAMPAIGN_ATTRIBUTION_WINDOW_DAYS = readInteger(
     env,
@@ -607,7 +661,10 @@ function ctaOverrideTypes(): string {
  * `<userId>`, which matches on every platform. The list is empty by default, which disables the
  * whole editorial surface.
  */
-export function parseAdminUserIds(raw: unknown): string[] {
+export function parseAdminUserIds(
+  raw: unknown,
+  key = 'CHANNEL_ADMIN_USER_IDS',
+): string[] {
   if (isBlank(raw)) {
     return [];
   }
@@ -627,7 +684,7 @@ export function parseAdminUserIds(raw: unknown): string[] {
       (tail.length === 1 && head !== 'bale' && head !== 'telegram')
     ) {
       throw new EnvironmentValidationError(
-        `Invalid CHANNEL_ADMIN_USER_IDS entry "${id}" — expected "<userId>" or "<bale|telegram>:<userId>"`,
+        `Invalid ${key} entry "${id}" — expected "<userId>" or "<bale|telegram>:<userId>"`,
       );
     }
   }
@@ -849,6 +906,12 @@ export function validateEnvironment(
   // --- Phase 7: growth engine ---
   env.REFERRAL_ENABLED = readBoolean(env, 'REFERRAL_ENABLED');
   env.REFERRAL_REWARDS_ENABLED = readBoolean(env, 'REFERRAL_REWARDS_ENABLED');
+  // --- Phase 9: sales engine ---
+  env.SALES_ENGINE_ENABLED = readBoolean(env, 'SALES_ENGINE_ENABLED');
+  // Reuses the same allow-list parser (and therefore the same accepted syntax) as the channel
+  // admins, so both surfaces cannot drift apart.
+  parseAdminUserIds(env.SALES_ADMIN_USER_IDS, 'SALES_ADMIN_USER_IDS');
+
   // --- Phase 8: campaign tracking ---
   env.CAMPAIGN_TRACKING_ENABLED = readBoolean(env, 'CAMPAIGN_TRACKING_ENABLED');
   env.CAMPAIGN_CHANNEL_JOIN_VERIFICATION =

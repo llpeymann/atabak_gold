@@ -403,6 +403,61 @@ export class AppConfigService {
     return this.readNonNegativeInteger('CAMPAIGN_MAX_RAW_EVENTS', 20_000);
   }
 
+  // --- Phase 9: sales engine ---
+
+  /** Master switch of the Sales Engine (`false` = no purchase entry, no new lead). */
+  get salesEnabled(): boolean {
+    return this.readBooleanFlag('SALES_ENGINE_ENABLED', true);
+  }
+
+  /** Where leads, activity history, sales outcomes and notifications are persisted. */
+  get salesDataFile(): string | null {
+    return this.optionalPath('SALES_DATA_FILE');
+  }
+
+  /**
+   * Dedicated sales administrators; empty means “reuse the existing channel allow-list”, so the
+   * Sales Engine never needs a second, divergent source of truth for who is trusted.
+   */
+  get salesAdminIds(): readonly string[] {
+    return parseAdminUserIds(
+      this.configService.get<string>('SALES_ADMIN_USER_IDS'),
+    );
+  }
+
+  /** Lifetime of an unfinished purchase form. */
+  get salesFormTtlMs(): number {
+    return this.readInteger('SALES_FORM_TTL_MINUTES', 30) * 60_000;
+  }
+
+  /** Maximum delivery attempts per notification (1 = a single attempt). */
+  get salesNotificationMaxAttempts(): number {
+    return this.readInteger('SALES_NOTIFICATION_MAX_ATTEMPTS', 3);
+  }
+
+  /** Delay between two delivery attempts (bounded backoff, never an unbounded loop). */
+  get salesNotificationRetryDelayMs(): number {
+    return this.readNonNegativeInteger(
+      'SALES_NOTIFICATION_RETRY_DELAY_MS',
+      5_000,
+    );
+  }
+
+  /**
+   * Retention of leads in a terminal status. `0` (the default) means “never delete automatically”;
+   * the policy is documented in the README and the phase report.
+   */
+  get salesLeadRetentionMs(): number {
+    return (
+      this.readNonNegativeInteger('SALES_LEAD_RETENTION_DAYS', 0) * 86_400_000
+    );
+  }
+
+  /** How many open leads one identity may have at the same time (`0` = unlimited). */
+  get salesMaxOpenLeadsPerIdentity(): number {
+    return this.readNonNegativeInteger('SALES_MAX_OPEN_LEADS_PER_IDENTITY', 5);
+  }
+
   /** Inbound interaction switch: `false` keeps the pre-Phase-2 publish-only behaviour. */
   get botPollingEnabled(): boolean {
     return (

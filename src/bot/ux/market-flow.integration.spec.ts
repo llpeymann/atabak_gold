@@ -1,7 +1,10 @@
 import { AlertService } from '../../alerts/alert.service';
 import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
-import { createCampaignHarness } from '../../testing/test-doubles';
+import {
+  createCampaignHarness,
+  createSalesHarness,
+} from '../../testing/test-doubles';
 import { ContentAdminService } from '../content/content-admin.service';
 import { CtaPolicyService } from '../../channel/cta-policy.service';
 import { BotDestinationService } from '../destination.service';
@@ -110,6 +113,12 @@ describe('market flow (integration)', () => {
       { ...process.env, BOT_POLLING_ENABLED: 'false' },
       { config },
     );
+    // Phase 9 — the sales stack, wired exactly like the application (it shares the campaign stack and
+    // therefore the real attribution rules).
+    const sales = createSalesHarness(
+      { ...process.env, BOT_POLLING_ENABLED: 'false' },
+      { config, campaigns, views },
+    );
 
     const botUx = new BotUxService(
       config,
@@ -128,6 +137,8 @@ describe('market flow (integration)', () => {
       growth,
       campaigns.tracking,
       campaigns.admin,
+      sales.ux,
+      sales.admin,
     );
 
     // `priceService` only exists to prove it is never used.

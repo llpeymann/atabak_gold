@@ -148,6 +148,8 @@ describe('Bot UX (e2e)', () => {
       '🔔 هشدار',
       '⭐ علاقهمندیها',
       '👥 دعوت از دوستان',
+      // Phase 9 — the gold-purchase entry, added without changing any existing entry.
+      '🛒 خرید طلا',
       '📢 کانال اتابک',
     ]);
   });

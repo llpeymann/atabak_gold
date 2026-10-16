@@ -37,6 +37,17 @@ if (!process.env.USER_DATA_FILE) {
 process.env.CAMPAIGN_TRACKING_BASE_URL =
   process.env.CAMPAIGN_TRACKING_BASE_URL ?? 'https://track.e2e.test';
 
+// Phase 9: the sales engine keeps its leads in the same throw-away directory, and the customer /
+// operator surfaces are enabled for a synthetic admin id so authorization can be exercised.
+process.env.SALES_DATA_FILE =
+  process.env.SALES_DATA_FILE ??
+  join(process.env.ATABAK_E2E_DIR ?? tmpdir(), 'sales.json');
+process.env.SALES_ENGINE_ENABLED = process.env.SALES_ENGINE_ENABLED ?? 'true';
+process.env.SALES_ADMIN_USER_IDS =
+  process.env.SALES_ADMIN_USER_IDS ?? 'bale:e2e-sales-admin';
+process.env.SALES_NOTIFICATION_RETRY_DELAY_MS =
+  process.env.SALES_NOTIFICATION_RETRY_DELAY_MS ?? '0';
+
 // Phase 6: a synthetic public bot username so the channel → bot CTA path is exercised end to end.
 // It is clearly a test value; the e2e suite never talks to a real platform.
 process.env.BALE_BOT_USERNAME =

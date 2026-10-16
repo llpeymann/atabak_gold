@@ -62,6 +62,11 @@ export type UxEvent =
   | 'campaign_start_rejected'
   | 'campaign_membership_checked'
   | 'campaign_alert_recorded'
+  // Phase 9 — sales engine: entering the purchase flow, a form that expired, and the lead
+  // management surface being opened. No name, phone, description or reference is ever logged here.
+  | 'sales_entry'
+  | 'sales_form_expired'
+  | 'sales_lead_admin_open'
   | 'back'
   | 'home'
   | 'invalid_callback'

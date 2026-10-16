@@ -20,11 +20,15 @@ import {
   isCampaignAction,
   isAlertAction,
   isContentAction,
+  isSalesAction,
+  isSalesAdminAction,
   parseCallbackData,
   ScreenKey,
 } from './callback-data';
 import { ContentAdminService } from '../content/content-admin.service';
 import { CampaignAdminService } from '../campaign/campaign-admin.service';
+import { SalesAdminService } from '../sales/sales-admin.service';
+import { SalesUxService } from '../sales/sales-ux.service';
 import { CampaignTrackingService } from '../../campaigns/campaign-tracking.service';
 import { BotDestinationService } from '../destination.service';
 import { BotRoute, parseStartPayload, screenForRoute } from '../deep-link';
@@ -124,7 +128,9 @@ type UxScreen =
   | 'alerts-list'
   | 'alert-detail'
   | 'alert-wizard'
-  | 'alert-created';
+  | 'alert-created'
+  // Phase 9 — the customer's purchase/quotation entry (child of the main menu).
+  | 'sales';
 
 /** Callback actions that simply open a screen (everything except mutations). */
 type NavigationAction = Extract<
@@ -205,6 +211,11 @@ export class BotUxService {
     // last, so every earlier phase keeps its constructor position (§19 backward compatibility).
     private readonly campaignTracking: CampaignTrackingService,
     private readonly campaignAdmin: CampaignAdminService,
+    // Phase 9 — sales engine: the customer purchase flow and the (admin-only) lead management
+    // surface. Appended last, exactly like the Phase 8 pair, so every earlier phase keeps its
+    // constructor position.
+    private readonly salesUx: SalesUxService,
+    private readonly salesAdmin: SalesAdminService,
   ) {}
 
   /** Entry point used by the inbound poller (and by tests). Never throws for bad input. */
@@ -440,7 +451,10 @@ export class BotUxService {
       await adapter.render({
         chatId: notice.chatId,
         text: formatRewardGrantedNotice(notice),
-        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
+        keyboard: mainMenuKeyboard({
+          referral: this.growth.enabled,
+          sales: this.salesUx.enabled,
+        }),
       });
       this.events.record('referral_reward_granted', {
         platform: notice.platform,
@@ -465,6 +479,36 @@ export class BotUxService {
       return;
     }
 
+    // Phase 9 — an unfinished purchase form owns the next plain message (it has its own expiry, and
+    // a command always leaves the form: an incomplete form never becomes a lead, §7.4).
+    if (
+      message.text !== null &&
+      (await this.salesUx.handleText(
+        adapter,
+        user,
+        message.text,
+        message.chatId,
+      ))
+    ) {
+      return;
+    }
+
+    // An operator who was asked for a note or a sale amount answers with one message. A command is
+    // never swallowed as note text: it ends the pending state and runs normally (§10.3), and an
+    // unrelated command must not leave the surface waiting for input forever either.
+    const text = message.text ?? '';
+    const textIsCommand = text.trimStart().startsWith('/');
+
+    if (textIsCommand) {
+      this.salesAdmin.clearPending(user.id);
+    } else if (
+      message.text !== null &&
+      this.salesAdmin.hasPendingInput(user.id) &&
+      (await this.salesAdmin.consumeInput(adapter, user, message.text))
+    ) {
+      return;
+    }
+
     const command = asCommand(message);
 
     if (command === 'start') {
@@ -481,7 +525,10 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: menuKeyboard({ referral: this.growth.enabled }),
+        keyboard: menuKeyboard({
+          referral: this.growth.enabled,
+          sales: this.salesUx.enabled,
+        }),
       });
       return;
     }
@@ -498,6 +545,24 @@ export class BotUxService {
         chatId: message.chatId,
         text: screen.text,
         keyboard: screen.keyboard,
+      });
+      return;
+    }
+
+    // Phase 9 — `🛒 خرید طلا` reached as a command. Starting from a command always means “start
+    // over”: a half-finished form is dropped and can never be submitted later.
+    if (this.salesUx.owns(message.text ?? '')) {
+      this.salesUx.clearForm(user.id);
+      const entry = this.salesUx.renderEntry();
+      this.remember(user.id, 'sales');
+      this.events.record('sales_entry', {
+        platform: adapter.platform,
+        userId: user.id,
+      });
+      await adapter.render({
+        chatId: message.chatId,
+        text: entry.text,
+        keyboard: entry.keyboard,
       });
       return;
     }
@@ -519,7 +584,10 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
+        keyboard: mainMenuKeyboard({
+          referral: this.growth.enabled,
+          sales: this.salesUx.enabled,
+        }),
       });
       return;
     }
@@ -541,7 +609,35 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
+        keyboard: mainMenuKeyboard({
+          referral: this.growth.enabled,
+          sales: this.salesUx.enabled,
+        }),
+      });
+      return;
+    }
+
+    // Phase 9 — the lead management surface. Admin-gated server-side; a non-admin sees the ordinary
+    // menu and the existence of the surface is not disclosed (§10.4).
+    if (command === 'sales' || this.salesAdmin.owns(message.text ?? '')) {
+      const handled = await this.salesAdmin.handleCommand(
+        adapter,
+        user,
+        message.text ?? '',
+      );
+
+      if (handled) {
+        return;
+      }
+
+      this.remember(user.id, 'menu');
+      await adapter.render({
+        chatId: message.chatId,
+        text: formatMenuScreen(),
+        keyboard: mainMenuKeyboard({
+          referral: this.growth.enabled,
+          sales: this.salesUx.enabled,
+        }),
       });
       return;
     }
@@ -556,7 +652,10 @@ export class BotUxService {
     await adapter.render({
       chatId: message.chatId,
       text: formatMenuScreen(),
-      keyboard: menuKeyboard({ referral: this.growth.enabled }),
+      keyboard: menuKeyboard({
+        referral: this.growth.enabled,
+        sales: this.salesUx.enabled,
+      }),
     });
   }
 
@@ -588,6 +687,36 @@ export class BotUxService {
         user,
         callback.callbackId,
         typeof callback.messageId === 'number' ? callback.messageId : undefined,
+        action,
+      );
+      return;
+    }
+
+    // Phase 9 — the sales surface answers its own buttons: the customer flow and the lead management
+    // surface. Both re-check everything they own server-side, and both are dispatched before the
+    // generic acknowledgement so a press is answered exactly once.
+    if (action && isSalesAction(action)) {
+      const messageId =
+        typeof callback.messageId === 'number' ? callback.messageId : undefined;
+
+      if (isSalesAdminAction(action)) {
+        await this.salesAdmin.handleCallback(
+          adapter,
+          user,
+          callback.callbackId,
+          messageId,
+          action,
+        );
+        return;
+      }
+
+      // Any navigation inside the sales surface ends a half-finished alert wizard.
+      this.clearWizard(user.id);
+      await this.salesUx.handleCallback(
+        adapter,
+        user,
+        callback.callbackId,
+        messageId,
         action,
       );
       return;
@@ -638,6 +767,12 @@ export class BotUxService {
     if (target !== 'alert-wizard') {
       // Any explicit navigation away from the wizard ends it (no stale half-finished state).
       this.clearWizard(user.id);
+    }
+
+    // Navigating away from the sales entry also abandons an unfinished purchase form: nothing is
+    // registered, and the customer is never counted as a lead (§7.4).
+    if (target !== 'sales') {
+      this.salesUx.clearForm(user.id);
     }
 
     const rendered = this.withChannelInvite(
@@ -785,6 +920,11 @@ export class BotUxService {
           case 'referral':
             this.events.record('referral_open', base);
             return;
+          // Phase 9 — entering the purchase flow. Only the fact is logged: no name, no phone and no
+          // description ever reaches the event log (§6.3).
+          case 'sales':
+            this.events.record('sales_entry', base);
+            return;
           default:
             return;
         }
@@ -834,7 +974,10 @@ export class BotUxService {
         return {
           screen: 'menu',
           text: formatMenuScreen(),
-          keyboard: menuKeyboard({ referral: this.growth.enabled }),
+          keyboard: menuKeyboard({
+            referral: this.growth.enabled,
+            sales: this.salesUx.enabled,
+          }),
         };
 
       case 'prices': {
@@ -995,6 +1138,14 @@ export class BotUxService {
         };
       }
 
+      // Phase 9 — `🛒 خرید طلا`: the customer entry of the Sales Engine. A disabled engine is
+      // explained instead of showing an entry that cannot work (§16).
+      case 'sales': {
+        const entry = this.salesUx.renderEntry();
+
+        return { screen: 'sales', text: entry.text, keyboard: entry.keyboard };
+      }
+
       case 'channel': {
         // Phase 6: a missing channel destination is answered with an explanation instead of a button
         // that cannot work (§7 rule 8).
@@ -1069,7 +1220,10 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatWelcomeScreen(),
-        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
+        keyboard: mainMenuKeyboard({
+          referral: this.growth.enabled,
+          sales: this.salesUx.enabled,
+        }),
       });
       return;
     }
@@ -1088,7 +1242,10 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: `${formatUnknownStartScreen()}\n\n${formatMenuScreen()}`,
-        keyboard: menuKeyboard({ referral: this.growth.enabled }),
+        keyboard: menuKeyboard({
+          referral: this.growth.enabled,
+          sales: this.salesUx.enabled,
+        }),
       });
       return;
     }
@@ -1107,7 +1264,10 @@ export class BotUxService {
         text: note
           ? `${formatReferralWelcomeNote(note)}\n\n${formatWelcomeScreen()}`
           : formatWelcomeScreen(),
-        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
+        keyboard: mainMenuKeyboard({
+          referral: this.growth.enabled,
+          sales: this.salesUx.enabled,
+        }),
       });
       return;
     }
@@ -1132,7 +1292,10 @@ export class BotUxService {
         await adapter.render({
           chatId: message.chatId,
           text: `${formatCampaignUnavailableScreen()}\n\n${formatMenuScreen()}`,
-          keyboard: menuKeyboard({ referral: this.growth.enabled }),
+          keyboard: menuKeyboard({
+            referral: this.growth.enabled,
+            sales: this.salesUx.enabled,
+          }),
         });
         return;
       }
@@ -1918,6 +2081,10 @@ export class BotUxService {
     step: AlertWizard['step'],
     seed: Partial<AlertWizard> = {},
   ): void {
+    // A user can be in exactly one multi-step flow: starting an alert wizard abandons an unfinished
+    // purchase form instead of leaving two conflicting prompts alive.
+    this.salesUx.clearForm(userId);
+
     this.sessions.set(userId, {
       screen: 'alert-wizard',
       wizard: {
@@ -1997,6 +2164,8 @@ export class BotUxService {
       case 'alert-detail':
       case 'alert-wizard':
         return 'alerts-list';
+      case 'sales':
+        return 'menu';
       case 'menu':
         return 'menu';
       default:

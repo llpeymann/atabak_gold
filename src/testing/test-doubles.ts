@@ -13,6 +13,11 @@ import { AlertService } from '../alerts/alert.service';
 import { AlertStore } from '../alerts/alert.store';
 import { BotUxService } from '../bot/ux/bot-ux.service';
 import { CampaignAdminService } from '../bot/campaign/campaign-admin.service';
+import { SalesAdminService } from '../bot/sales/sales-admin.service';
+import { SalesNotificationService } from '../sales/sales-notification.service';
+import { SalesService } from '../sales/sales.service';
+import { SalesStore } from '../sales/sales.store';
+import { SalesUxService } from '../bot/sales/sales-ux.service';
 import { CampaignConversionService } from '../campaigns/campaign-conversion.service';
 import { CampaignMetricsService } from '../campaigns/campaign-metrics.service';
 import { CampaignService } from '../campaigns/campaign.service';
@@ -854,6 +859,79 @@ export function createChannelHarness(
   };
 }
 
+/**
+ * Phase 9 stack (lead store → lead lifecycle → notification outbox → customer/operator surfaces).
+ *
+ * It is built on the *same* campaign stack, the same user store and the same platform registry the
+ * application uses, so a test observes real attribution and real (doubled) transport instead of a
+ * parallel wiring. `views` is the Phase 2 read-only market projection the purchase flow shows as a
+ * reference price. The user store is only read through the notification outbox, which resolves the
+ * chat a stored lead came from; it is never used to invent an identity.
+ */
+export function createSalesHarness(
+  env: EnvMap = {},
+  options: {
+    config?: AppConfigService;
+    userStore?: UserStore;
+    platform?: PlatformHarness;
+    campaigns?: CampaignHarness;
+    views?: MarketViewService;
+  } = {},
+): SalesHarness {
+  const config = options.config ?? createAppConfigService(env);
+  const platform =
+    options.platform ??
+    createPlatformHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+  const campaigns =
+    options.campaigns ?? createCampaignHarness(env, { config, platform });
+  const userStore = options.userStore ?? new UserStore(config);
+  const views = options.views;
+
+  if (!views) {
+    throw new Error(
+      'createSalesHarness needs the UX view stack (views/users) to render the purchase flow.',
+    );
+  }
+
+  const store = new SalesStore(config);
+  const service = new SalesService(
+    config,
+    store,
+    campaigns.tracking,
+    campaigns.service,
+    campaigns.conversions,
+  );
+  const notifications = new SalesNotificationService(
+    config,
+    store,
+    service,
+    platform.registry,
+    userStore,
+  );
+
+  return {
+    config,
+    store,
+    service,
+    notifications,
+    ux: new SalesUxService(config, service, notifications, views),
+    admin: new SalesAdminService(config, service, notifications),
+    load: () => store.ensureLoaded(),
+  };
+}
+
+export interface SalesHarness {
+  config: AppConfigService;
+  store: SalesStore;
+  service: SalesService;
+  notifications: SalesNotificationService;
+  /** Phase 9 — the customer purchase flow (form + screens). */
+  ux: SalesUxService;
+  /** Phase 9 — the operator surface (commands + buttons). */
+  admin: SalesAdminService;
+  load: () => Promise<void>;
+}
+
 export interface CampaignHarness {
   config: AppConfigService;
   /** Platform harness the tracking service talks to (membership queries included). */
@@ -940,6 +1018,8 @@ export interface UxHarness {
   capacity: AlertCapacityService;
   /** Phase 8 — campaign tracking & attribution stack. */
   campaigns: CampaignHarness;
+  /** Phase 9 — sales engine (lead store, lead lifecycle and the two bot surfaces). */
+  sales: SalesHarness;
   /** Rendered platform calls of a given kind. */
   rendered: () => PlatformCall[];
   /** Newest rendered message (send or edit). */
@@ -1009,6 +1089,19 @@ export function createUxHarness(
       destinations: channel.destinations,
     },
   );
+  // Phase 9: the sales engine reuses the same campaign tracking stack (the only source of campaign
+  // attribution) and the same platform registry for delivery.
+  const salesStack = createSalesHarness(
+    { ...env, BOT_POLLING_ENABLED: 'false' },
+    {
+      config,
+      userStore: store,
+      platform,
+      campaigns,
+      views,
+    },
+  );
+
   const botUx = new BotUxService(
     config,
     platform.registry,
@@ -1021,6 +1114,8 @@ export function createUxHarness(
     growth,
     campaigns.tracking,
     campaigns.admin,
+    salesStack.ux,
+    salesStack.admin,
   );
 
   const rendered = (): PlatformCall[] =>
@@ -1044,6 +1139,7 @@ export function createUxHarness(
     growth,
     capacity,
     campaigns,
+    sales: salesStack,
     rendered,
     last: () => {
       const all = rendered();

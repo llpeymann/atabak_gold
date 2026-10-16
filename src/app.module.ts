@@ -51,6 +51,11 @@ import { CampaignMetricsService } from './campaigns/campaign-metrics.service';
 import { CampaignService } from './campaigns/campaign.service';
 import { CampaignStore } from './campaigns/campaign.store';
 import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
+import { SalesAdminService } from './bot/sales/sales-admin.service';
+import { SalesNotificationService } from './sales/sales-notification.service';
+import { SalesService } from './sales/sales.service';
+import { SalesStore } from './sales/sales.store';
+import { SalesUxService } from './bot/sales/sales-ux.service';
 
 @Module({
   imports: [
@@ -122,6 +127,12 @@ import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
     CampaignConversionService,
     CampaignMetricsService,
     CampaignAdminService,
+    // Phase 9 — sales engine (lead capture, follow-up, sales outcomes) reusing the Phase 8 links.
+    SalesStore,
+    SalesService,
+    SalesNotificationService,
+    SalesAdminService,
+    SalesUxService,
   ],
 })
 export class AppModule {}

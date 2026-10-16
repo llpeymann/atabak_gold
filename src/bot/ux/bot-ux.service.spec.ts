@@ -80,6 +80,8 @@ describe('BotUxService', () => {
         '⭐ علاقهمندیها',
         // Phase 7 — the referral entry lives inside the existing menu (§9.1).
         '👥 دعوت از دوستان',
+        // Phase 9 — the gold-purchase entry lives inside the existing menu as well (§3.1).
+        '🛒 خرید طلا',
         '📢 کانال اتابک',
       ]);
     });
@@ -371,8 +373,8 @@ describe('BotUxService', () => {
       await press('v1:back');
 
       expect(harness.last().text).toContain('منوی اصلی');
-      // 8 pre-Phase-7 buttons plus the Phase 7 referral entry.
-      expect(harness.buttons()).toHaveLength(9);
+      // 8 pre-Phase-7 buttons plus the Phase 7 referral and Phase 9 purchase entries.
+      expect(harness.buttons()).toHaveLength(10);
     });
 
     it('answers an unknown callback with a safe message', async () => {

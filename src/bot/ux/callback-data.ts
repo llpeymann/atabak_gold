@@ -11,6 +11,13 @@
  */
 
 import { isSafeChannelId } from '../../channel/channel.types';
+import {
+  isLossReason,
+  isProductCategory,
+  LeadStatus,
+  LossReason,
+  ProductCategory,
+} from '../../sales/sales.types';
 import { AlertTypeKey, isAlertTypeKey } from './alert-callback.types';
 
 export type { AlertTypeKey } from './alert-callback.types';
@@ -31,7 +38,9 @@ export type ScreenKey =
   | 'alerts'
   | 'channel'
   // Phase 7 — growth engine (referral screen). Child of the main menu, like the other hubs.
-  | 'referral';
+  | 'referral'
+  // Phase 9 — sales engine: the customer's purchase/quotation entry point.
+  | 'sales';
 
 export const SCREEN_KEYS: readonly ScreenKey[] = [
   'prices',
@@ -46,6 +55,7 @@ export const SCREEN_KEYS: readonly ScreenKey[] = [
   'alerts',
   'channel',
   'referral',
+  'sales',
 ];
 
 /** Alert actions exposed by buttons (Phase 3 §23–§40). */
@@ -93,6 +103,40 @@ export type CampaignCallbackAction =
   | { kind: 'campaign-pause'; campaignId: string }
   | { kind: 'campaign-end'; campaignId: string };
 
+/**
+ * Phase 9 — sales engine actions.
+ *
+ * Two families share one versioned namespace:
+ *
+ *  * customer actions (`sales:*`) carry a stable category id or nothing at all. Ownership is never
+ *    part of a payload: the request is always attached to the identity resolved server-side;
+ *  * admin actions (`salesadm:*`) carry an internal lead id (`lead_<n>`) or a status/reason token.
+ *    The payload never carries a role, and every press re-checks the admin allow-list server-side, so
+ *    a forwarded button cannot authorize anything.
+ */
+export type SalesCallbackAction =
+  | { kind: 'sales-hub' }
+  | { kind: 'sales-category'; category: ProductCategory }
+  | { kind: 'sales-skip-description' }
+  | { kind: 'sales-confirm' }
+  | { kind: 'sales-edit' }
+  | { kind: 'sales-cancel' }
+  | { kind: 'sales-track' }
+  | { kind: 'sales-list'; page: number }
+  | { kind: 'sales-lead-view'; leadId: string }
+  | { kind: 'sales-lead-status'; leadId: string; status: LeadStatus }
+  | { kind: 'sales-lead-lost'; leadId: string; reason: LossReason }
+  | { kind: 'sales-lead-loss-menu'; leadId: string }
+  | { kind: 'sales-lead-convert'; leadId: string }
+  | { kind: 'sales-lead-convert-confirm'; leadId: string }
+  | { kind: 'sales-lead-sale'; leadId: string }
+  | { kind: 'sales-lead-sale-note'; leadId: string }
+  | { kind: 'sales-lead-contact'; leadId: string }
+  | { kind: 'sales-lead-note'; leadId: string }
+  | { kind: 'sales-lead-assign'; leadId: string }
+  | { kind: 'sales-lead-assign-to'; leadId: string; index: number }
+  | { kind: 'sales-lead-history'; leadId: string };
+
 export type CallbackAction =
   | { kind: 'menu' }
   | { kind: 'home' }
@@ -103,7 +147,8 @@ export type CallbackAction =
   | { kind: 'favorite'; op: 'add' | 'remove'; symbol: string }
   | AlertCallbackAction
   | ContentCallbackAction
-  | CampaignCallbackAction;
+  | CampaignCallbackAction
+  | SalesCallbackAction;
 
 /** Symbols are uppercase registry ids; anything else is rejected before touching the store. */
 const SYMBOL_PATTERN = /^[A-Z0-9_]{1,32}$/;
@@ -224,6 +269,106 @@ export function callbackDataForCampaignStatus(
   return `${CALLBACK_VERSION}:camp:${op}:${campaignId}`;
 }
 
+export function callbackDataForSalesHub(): string {
+  return `${CALLBACK_VERSION}:sales:hub`;
+}
+
+export function callbackDataForSalesCategory(
+  category: ProductCategory,
+): string {
+  return `${CALLBACK_VERSION}:sales:cat:${category}`;
+}
+
+export function callbackDataForSalesSkipDescription(): string {
+  return `${CALLBACK_VERSION}:sales:skip`;
+}
+
+export function callbackDataForSalesConfirm(): string {
+  return `${CALLBACK_VERSION}:sales:confirm`;
+}
+
+export function callbackDataForSalesEdit(): string {
+  return `${CALLBACK_VERSION}:sales:edit`;
+}
+
+export function callbackDataForSalesCancel(): string {
+  return `${CALLBACK_VERSION}:sales:cancel`;
+}
+
+export function callbackDataForSalesTrack(): string {
+  return `${CALLBACK_VERSION}:sales:track`;
+}
+
+export function callbackDataForSalesList(page: number): string {
+  return `${CALLBACK_VERSION}:salesadm:list:${Math.max(1, Math.floor(page))}`;
+}
+
+export function callbackDataForSalesLeadView(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:view:${leadId}`;
+}
+
+/**
+ * Status/reason buttons carry the *target* token only: the domain layer decides whether the
+ * transition is allowed, and a role is never part of the payload.
+ */
+export function callbackDataForSalesLeadStatus(
+  leadId: string,
+  status: LeadStatus,
+): string {
+  return `${CALLBACK_VERSION}:salesadm:st:${leadId}:${status}`;
+}
+
+/** Opens the loss-reason list; recording a loss always requires a chosen reason (§10.1). */
+export function callbackDataForSalesLeadLossMenu(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:loss:${leadId}`;
+}
+
+export function callbackDataForSalesLeadLost(
+  leadId: string,
+  reason: LossReason,
+): string {
+  return `${CALLBACK_VERSION}:salesadm:lost:${leadId}:${reason}`;
+}
+
+export function callbackDataForSalesLeadConvert(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:conv:${leadId}`;
+}
+
+export function callbackDataForSalesLeadConvertConfirm(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:convyes:${leadId}`;
+}
+
+export function callbackDataForSalesLeadSale(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:sale:${leadId}`;
+}
+
+export function callbackDataForSalesLeadSaleNote(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:salen:${leadId}`;
+}
+
+export function callbackDataForSalesLeadContact(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:contact:${leadId}`;
+}
+
+export function callbackDataForSalesLeadNote(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:note:${leadId}`;
+}
+
+export function callbackDataForSalesLeadAssign(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:assign:${leadId}`;
+}
+
+export function callbackDataForSalesLeadAssignTo(
+  leadId: string,
+  index: number,
+): string {
+  return `${CALLBACK_VERSION}:salesadm:asto:${leadId}:${Math.max(0, Math.floor(index))}`;
+}
+
+export function callbackDataForSalesLeadHistory(leadId: string): string {
+  return `${CALLBACK_VERSION}:salesadm:hist:${leadId}`;
+}
+
 /** Campaign ids are generated internally (`cmp_<n>`); this is the shape a callback may carry. */
 export function isSafeCampaignId(value: string): boolean {
   return /^cmp_\d{1,10}$/.test(value);
@@ -244,6 +389,135 @@ export function isCampaignAction(
   action: CallbackAction,
 ): action is CampaignCallbackAction {
   return (CAMPAIGN_ACTION_KINDS as readonly string[]).includes(action.kind);
+}
+
+/** Lead ids are generated internally (`lead_<n>`); this is the shape a callback may carry. */
+export function isSafeLeadId(value: string): boolean {
+  return /^lead_\d{1,10}$/.test(value);
+}
+
+const SALES_STATUS_TOKENS: readonly LeadStatus[] = [
+  'NEW',
+  'CONTACTED',
+  'QUALIFIED',
+  'CONVERTED',
+  'LOST',
+];
+
+function isStatusToken(value: string): value is LeadStatus {
+  return (SALES_STATUS_TOKENS as readonly string[]).includes(value);
+}
+
+/**
+ * Sales actions. Every token is validated here — the category against the product registry, the
+ * status against the state machine's vocabulary, the loss reason against the fixed list and the lead
+ * id against its generated shape — so nothing malformed can reach the domain layer.
+ */
+function parseSalesAction(tail: readonly string[]): CallbackAction | null {
+  const [head, ...rest] = tail;
+
+  switch (head) {
+    case 'hub':
+      return rest.length === 0 ? { kind: 'sales-hub' } : null;
+    case 'skip':
+      return rest.length === 0 ? { kind: 'sales-skip-description' } : null;
+    case 'confirm':
+      return rest.length === 0 ? { kind: 'sales-confirm' } : null;
+    case 'edit':
+      return rest.length === 0 ? { kind: 'sales-edit' } : null;
+    case 'cancel':
+      return rest.length === 0 ? { kind: 'sales-cancel' } : null;
+    case 'track':
+      return rest.length === 0 ? { kind: 'sales-track' } : null;
+    case 'cat': {
+      const [category, ...extra] = rest;
+
+      return extra.length === 0 &&
+        category !== undefined &&
+        isProductCategory(category)
+        ? { kind: 'sales-category', category }
+        : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** Admin (lead management) actions inside the same versioned namespace. */
+function parseSalesAdminAction(tail: readonly string[]): CallbackAction | null {
+  const [head, ...rest] = tail;
+
+  if (head === 'list') {
+    const [page, ...extra] = rest;
+    const parsed = Number(page);
+
+    return extra.length === 0 && Number.isInteger(parsed) && parsed >= 1
+      ? { kind: 'sales-list', page: parsed }
+      : null;
+  }
+
+  const [leadId, ...extra] = rest;
+
+  if (leadId === undefined || !isSafeLeadId(leadId)) {
+    return null;
+  }
+
+  switch (head) {
+    case 'view':
+      return extra.length === 0 ? { kind: 'sales-lead-view', leadId } : null;
+    case 'conv':
+      return extra.length === 0 ? { kind: 'sales-lead-convert', leadId } : null;
+    case 'convyes':
+      return extra.length === 0
+        ? { kind: 'sales-lead-convert-confirm', leadId }
+        : null;
+    case 'sale':
+      return extra.length === 0 ? { kind: 'sales-lead-sale', leadId } : null;
+    case 'salen':
+      return extra.length === 0
+        ? { kind: 'sales-lead-sale-note', leadId }
+        : null;
+    case 'contact':
+      return extra.length === 0 ? { kind: 'sales-lead-contact', leadId } : null;
+    case 'note':
+      return extra.length === 0 ? { kind: 'sales-lead-note', leadId } : null;
+    case 'assign':
+      return extra.length === 0 ? { kind: 'sales-lead-assign', leadId } : null;
+    case 'hist':
+      return extra.length === 0 ? { kind: 'sales-lead-history', leadId } : null;
+    case 'loss':
+      return extra.length === 0
+        ? { kind: 'sales-lead-loss-menu', leadId }
+        : null;
+    case 'st': {
+      const [status, ...statusExtra] = extra;
+
+      return statusExtra.length === 0 &&
+        status !== undefined &&
+        isStatusToken(status)
+        ? { kind: 'sales-lead-status', leadId, status }
+        : null;
+    }
+    case 'lost': {
+      const [reason, ...reasonExtra] = extra;
+
+      return reasonExtra.length === 0 &&
+        reason !== undefined &&
+        isLossReason(reason)
+        ? { kind: 'sales-lead-lost', leadId, reason }
+        : null;
+    }
+    case 'asto': {
+      const [index, ...indexExtra] = extra;
+      const parsed = Number(index);
+
+      return indexExtra.length === 0 && Number.isInteger(parsed) && parsed >= 0
+        ? { kind: 'sales-lead-assign-to', leadId, index: parsed }
+        : null;
+    }
+    default:
+      return null;
+  }
 }
 
 /** Content ids are generated internally (`cnt_…`); this is the shape a callback may carry. */
@@ -495,6 +769,12 @@ export function parseCallbackData(
     case 'camp': {
       return parseCampaignAction(tail);
     }
+    case 'sales': {
+      return parseSalesAction(tail);
+    }
+    case 'salesadm': {
+      return parseSalesAdminAction(tail);
+    }
     case 'fav': {
       const [op, ...extra] = tail;
 
@@ -517,4 +797,43 @@ export function parseCallbackData(
     default:
       return null;
   }
+}
+
+const SALES_ACTION_KINDS: readonly SalesCallbackAction['kind'][] = [
+  'sales-hub',
+  'sales-category',
+  'sales-skip-description',
+  'sales-confirm',
+  'sales-edit',
+  'sales-cancel',
+  'sales-track',
+  'sales-list',
+  'sales-lead-view',
+  'sales-lead-status',
+  'sales-lead-lost',
+  'sales-lead-loss-menu',
+  'sales-lead-convert',
+  'sales-lead-convert-confirm',
+  'sales-lead-sale',
+  'sales-lead-sale-note',
+  'sales-lead-contact',
+  'sales-lead-note',
+  'sales-lead-assign',
+  'sales-lead-assign-to',
+  'sales-lead-history',
+];
+
+/** Narrow a parsed callback to a sales action (used by the router's dispatch). */
+export function isSalesAction(
+  action: CallbackAction,
+): action is SalesCallbackAction {
+  return (SALES_ACTION_KINDS as readonly string[]).includes(action.kind);
+}
+
+/** `true` for the lead-management half of the sales namespace (admin surface only). */
+export function isSalesAdminAction(action: SalesCallbackAction): boolean {
+  return (
+    action.kind.startsWith('sales-list') ||
+    action.kind.startsWith('sales-lead-')
+  );
 }

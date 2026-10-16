@@ -42,7 +42,7 @@ const SECTION_EMOJI: Record<string, string> = {
  * the entry point is *inside* the existing menu, never a second menu or a replacement of one (§9.1).
  */
 export function mainMenuKeyboard(
-  options: { referral?: boolean } = {},
+  options: { referral?: boolean; sales?: boolean } = {},
 ): Keyboard {
   return [
     [{ text: '💰 قیمت لحظهای', callbackData: callbackDataForScreen('prices') }],
@@ -66,6 +66,18 @@ export function mainMenuKeyboard(
             {
               text: '👥 دعوت از دوستان',
               callbackData: callbackDataForScreen('referral'),
+            },
+          ],
+        ]
+      : []),
+    ...(options.sales
+      ? [
+          [
+            {
+              // Phase 9 — the purchase/quotation entry. It is appended (not inserted) so every
+              // existing row keeps its position (§2).
+              text: '🛒 خرید طلا',
+              callbackData: callbackDataForScreen('sales'),
             },
           ],
         ]
@@ -161,7 +173,12 @@ export function dailyReportKeyboard(): Keyboard {
   ];
 }
 
-export function menuKeyboard(options: { referral?: boolean } = {}): Keyboard {
+export function menuKeyboard(
+  options: {
+    referral?: boolean;
+    sales?: boolean;
+  } = {},
+): Keyboard {
   return [
     ...mainMenuKeyboard(options),
     [{ text: '🏠 منوی اصلی', callbackData: callbackDataForHome() }],
