@@ -320,3 +320,113 @@ export function tidy(lines: string[]): string {
     .replace(/\n{3,}/g, '\n\n')
     .trimEnd();
 }
+
+// --- Phase 7: growth engine (referrals) --------------------------------------
+
+/** Which numbers of the referral screen the formatter needs (all pre-computed from persistence). */
+export interface ReferralScreenData {
+  successfulReferrals: number;
+  activeReferrals: number;
+  grantedRewards: number;
+  earnedThresholds: number;
+  pendingRewards: number;
+  remainingForNextReward: number;
+  referralsPerReward: number;
+  effectiveAlertCapacity: number;
+  baseAlertCapacity: number;
+}
+
+/**
+ * The referral screen (`👥 دعوت‌های من`).
+ *
+ * Every number comes from persisted data: `successfulReferrals` from the referral rows,
+ * `grantedRewards` from the reward ledger — the "remaining" and "earned" values are shown as progress
+ * only, so a pending reward is never presented as an applied one (§7.3).
+ */
+export function formatReferralScreen(
+  data: ReferralScreenData,
+  link: string | null,
+): string {
+  const lines: string[] = [
+    '👥 <b>دعوت از دوستان</b>',
+    '',
+    `✅ دعوت‌های موفق شما: <b>${formatNumberFa(data.successfulReferrals)}</b>`,
+    `🟢 از این تعداد، فعال در ۳۰ روز گذشته: <b>${formatNumberFa(data.activeReferrals)}</b>`,
+    `🎁 ظرفیت دائمی دریافت‌شده: <b>${formatNumberFa(data.grantedRewards)}</b> ظرفیت اضافه`,
+  ];
+
+  if (data.pendingRewards > 0) {
+    lines.push(
+      `⏳ پاداش در حال ثبت: <b>${formatNumberFa(data.pendingRewards)}</b> (به‌زودی اعمال می‌شود)`,
+    );
+  }
+
+  lines.push(
+    `📈 پیشرفت تا پاداش بعدی: <b>${formatNumberFa(data.remainingForNextReward)}</b> دعوت موفق دیگر`,
+    '',
+    `🔔 ظرفیت هشدارهای شما: <b>${formatNumberFa(data.effectiveAlertCapacity)}</b> هشدار فعال` +
+      (data.grantedRewards > 0
+        ? ` (شامل ${formatNumberFa(data.effectiveAlertCapacity - data.baseAlertCapacity)} ظرفیت دائمی هدیه)`
+        : ''),
+    '',
+    `📌 <b>روش کار:</b> هر ${formatNumberFa(data.referralsPerReward)} دعوت موفق، یک ظرفیت دائمی اضافه برای هشدار قیمت. ظرفیت هدیه هرگز با بی‌فعالیتی از بین نمی‌رود.`,
+    'دعوت موفق یعنی کاربر جدید از لینک شما وارد شود و ثبت‌نامش کامل شود؛ باز شدن لینک به‌تنهایی دعوت حساب نمی‌شود.',
+  );
+
+  if (link) {
+    lines.push(
+      '',
+      `🔗 <b>لینک دعوت شما:</b>`,
+      `<code>${escapeHtml(link)}</code>`,
+    );
+  } else {
+    lines.push(
+      '',
+      '⚠️ در حال حاضر لینک دعوت تنظیم نشده است. می‌توانید نام کاربری ربات را برای دوستانتان بفرستید؛ به‌محض فعال شدن لینک، همین بخش به‌روزرسانی می‌شود.',
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/** Shown when the growth engine is switched off by configuration (§12). */
+export function formatReferralDisabledScreen(): string {
+  return (
+    '👥 <b>دعوت از دوستان</b>\n\n' +
+    'این بخش در حال حاضر غیرفعال است.\n' +
+    'دعوت‌ها و ظرفیت‌های دریافت‌شده قبلی محفوظ می‌مانند و در صورت فعال شدن، همان‌جا نمایش داده می‌شوند.'
+  );
+}
+
+/** One-line note shown next to the normal start flow for a referral arrival (never blocking). */
+export function formatReferralWelcomeNote(
+  kind: 'joined' | 'existing' | 'self',
+): string {
+  switch (kind) {
+    case 'joined':
+      return '🎉 خوش آمدید! ثبت‌نام شما از طریق لینک دعوت انجام شد.';
+    case 'existing':
+      return 'ℹ️ این کد دعوت برای کاربران جدید است؛ حساب شما قبلاً ثبت شده است.';
+    case 'self':
+      return '🙂 این لینک دعوت خودت است؛ دعوت از خودت ثبت نمی‌شود.';
+  }
+}
+
+/**
+ * The congratulation message for an earned referral reward (§8.4).
+ *
+ * It is built from the *applied* reward only: the threshold that was really reached and the capacity
+ * that is really in force. Numbers are rendered like every other number in the bot (Persian digits),
+ * and the message carries no internal identifier.
+ */
+export function formatRewardGrantedNotice(notice: {
+  threshold: number;
+  slots: number;
+  totalCapacity: number;
+}): string {
+  return (
+    `🎁 تبریک! با تکمیل ${formatNumberFa(notice.threshold)} دعوت موفق، ` +
+    `${formatNumberFa(notice.slots)} ظرفیت دائمی اضافه برای هشدار قیمت دریافت کردی.\n\n` +
+    `ظرفیت فعلی هشدارهای تو: ${formatNumberFa(notice.totalCapacity)} هشدار فعال.`
+  );
+}

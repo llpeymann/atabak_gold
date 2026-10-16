@@ -1,5 +1,6 @@
 import {
   EnvironmentValidationError,
+  REFERRAL_DEFAULTS,
   parseCtaRouteOverrides,
   parseSymbolUnits,
   parseThresholdOverrides,
@@ -278,5 +279,120 @@ describe('Phase 6 configuration (§9)', () => {
         CHANNEL_CTA_ROUTES: '',
       }),
     ).not.toThrow();
+  });
+});
+
+describe('Phase 7 configuration (referrals & rewards)', () => {
+  it('ships the documented defaults (3 referrals per reward, 1 slot, 30-day window)', () => {
+    const env = validateEnvironment(validEnv());
+
+    expect(env.REFERRAL_ENABLED).toBe('true');
+    expect(env.REFERRAL_REWARDS_ENABLED).toBe('true');
+    expect(env.REFERRAL_REWARDS_PER_THRESHOLD).toBe('3');
+    expect(env.REFERRAL_REWARD_BONUS_SLOTS).toBe('1');
+    expect(env.REFERRAL_ACTIVE_WINDOW_DAYS).toBe('30');
+    expect(env.REFERRAL_MAX_BONUS_SLOTS).toBe('50');
+    // No destination is invented: referral links stay off until an operator configures them.
+    expect(env.BALE_REFERRAL_BOT_USERNAME).toBe('');
+    expect(env.TELEGRAM_REFERRAL_BOT_USERNAME).toBe('');
+  });
+
+  it('normalizes referral bot usernames exactly like the Phase 6 destinations', () => {
+    const env = validateEnvironment({
+      ...validEnv(),
+      BALE_REFERRAL_BOT_USERNAME: ' @atabak_bot ',
+      TELEGRAM_REFERRAL_BOT_USERNAME: 'atabak_tg_bot',
+    });
+
+    expect(env.BALE_REFERRAL_BOT_USERNAME).toBe('atabak_bot');
+    expect(env.TELEGRAM_REFERRAL_BOT_USERNAME).toBe('atabak_tg_bot');
+  });
+
+  it.each([
+    'atabak-bot',
+    'ab',
+    '1atabak_bot',
+    '@',
+    'atabak bot',
+    'atabak_bot!',
+  ])('refuses to start with the unusable referral username %s', (username) => {
+    expect(() =>
+      validateEnvironment({
+        ...validEnv(),
+        BALE_REFERRAL_BOT_USERNAME: username,
+      }),
+    ).toThrow(/BALE_REFERRAL_BOT_USERNAME/);
+  });
+
+  it.each(['0', '-1', 'abc', '3.5', '10001'])(
+    'refuses the invalid reward threshold %s (a zero would make everyone eligible)',
+    (value) => {
+      expect(() =>
+        validateEnvironment({
+          ...validEnv(),
+          REFERRAL_REWARDS_PER_THRESHOLD: value,
+        }),
+      ).toThrow(/REFERRAL_REWARDS_PER_THRESHOLD/);
+    },
+  );
+
+  it.each(['0', '-1', 'abc', '101'])(
+    'refuses the invalid bonus slot count %s (a reward must add something)',
+    (value) => {
+      expect(() =>
+        validateEnvironment({
+          ...validEnv(),
+          REFERRAL_REWARD_BONUS_SLOTS: value,
+        }),
+      ).toThrow(/REFERRAL_REWARD_BONUS_SLOTS/);
+    },
+  );
+
+  it.each(['0', '-5', 'abc', '5000'])(
+    'refuses the invalid activity window %s',
+    (value) => {
+      expect(() =>
+        validateEnvironment({
+          ...validEnv(),
+          REFERRAL_ACTIVE_WINDOW_DAYS: value,
+        }),
+      ).toThrow(/REFERRAL_ACTIVE_WINDOW_DAYS/);
+    },
+  );
+
+  it.each(['0', '-1'])(
+    'refuses a bonus ceiling of %s (capacity must stay bounded by a positive number)',
+    (value) => {
+      expect(() =>
+        validateEnvironment({ ...validEnv(), REFERRAL_MAX_BONUS_SLOTS: value }),
+      ).toThrow(/REFERRAL_MAX_BONUS_SLOTS/);
+    },
+  );
+
+  it('accepts an explicit configuration and keeps every value verbatim', () => {
+    const env = validateEnvironment({
+      ...validEnv(),
+      REFERRAL_ENABLED: 'false',
+      REFERRAL_REWARDS_ENABLED: 'false',
+      REFERRAL_REWARDS_PER_THRESHOLD: '5',
+      REFERRAL_REWARD_BONUS_SLOTS: '2',
+      REFERRAL_ACTIVE_WINDOW_DAYS: '7',
+      REFERRAL_MAX_BONUS_SLOTS: '10',
+    });
+
+    expect(env.REFERRAL_ENABLED).toBe('false');
+    expect(env.REFERRAL_REWARDS_ENABLED).toBe('false');
+    expect(env.REFERRAL_REWARDS_PER_THRESHOLD).toBe('5');
+    expect(env.REFERRAL_REWARD_BONUS_SLOTS).toBe('2');
+    expect(env.REFERRAL_ACTIVE_WINDOW_DAYS).toBe('7');
+    expect(env.REFERRAL_MAX_BONUS_SLOTS).toBe('10');
+  });
+
+  it('documents the frozen rule in one place instead of scattering it across services', () => {
+    expect(REFERRAL_DEFAULTS).toEqual({
+      rewardsPerThreshold: 3,
+      bonusSlots: 1,
+      activeWindowDays: 30,
+    });
   });
 });

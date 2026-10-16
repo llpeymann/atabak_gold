@@ -78,6 +78,8 @@ describe('BotUxService', () => {
         '📊 بازار',
         '🔔 هشدار',
         '⭐ علاقهمندیها',
+        // Phase 7 — the referral entry lives inside the existing menu (§9.1).
+        '👥 دعوت از دوستان',
         '📢 کانال اتابک',
       ]);
     });
@@ -369,7 +371,8 @@ describe('BotUxService', () => {
       await press('v1:back');
 
       expect(harness.last().text).toContain('منوی اصلی');
-      expect(harness.buttons()).toHaveLength(8);
+      // 8 pre-Phase-7 buttons plus the Phase 7 referral entry.
+      expect(harness.buttons()).toHaveLength(9);
     });
 
     it('answers an unknown callback with a safe message', async () => {

@@ -38,6 +38,8 @@ import { PriceService } from './price/price.service';
 import { BotApiClient } from './platform/bot-api.client';
 import { PlatformRegistry } from './platform/platform-registry.service';
 import { UpdatePollerService } from './platform/update-poller.service';
+import { AlertCapacityService } from './alerts/alert-capacity.service';
+import { ReferralService } from './referrals/referral.service';
 import { UserService } from './users/user.service';
 import { UserStore } from './users/user.store';
 
@@ -99,6 +101,11 @@ import { UserStore } from './users/user.store';
     ChannelEngineService,
     ContentService,
     ContentAdminService,
+    // Phase 7 — Growth Engine: referral codes, attribution, the reward ledger and the effective
+    // alert capacity derived from it. Registered in the same flat provider list so the alerts and
+    // the referral rules share exactly one `UserStore` instance.
+    AlertCapacityService,
+    ReferralService,
   ],
 })
 export class AppModule {}

@@ -33,6 +33,9 @@ import {
   seedMarketState,
 } from '../../testing/test-doubles';
 
+import { AlertCapacityService } from '../../alerts/alert-capacity.service';
+import { ReferralService } from '../../referrals/referral.service';
+
 const PLATFORM_USER = 'integration-user';
 const CHAT_ID = 'integration-chat';
 
@@ -116,6 +119,12 @@ describe('favorites flow (integration)', () => {
       alertStore,
       market.marketState,
       store,
+      new AlertCapacityService(config, store),
+    );
+    const growth = new ReferralService(
+      config,
+      store,
+      new AlertCapacityService(config, store),
     );
     const botUx = new BotUxService(
       config,
@@ -131,6 +140,7 @@ describe('favorites flow (integration)', () => {
         new CtaPolicyService(config),
       ),
       new BotDestinationService(config),
+      growth,
     );
 
     return { botUx, store, users, platform, market, config };
@@ -242,18 +252,26 @@ describe('favorites flow (integration)', () => {
       version: number;
       users: Record<string, unknown>[];
       favorites: Record<string, unknown>[];
+      referrals: unknown[];
+      rewards: unknown[];
     };
 
-    expect(persisted.version).toBe(1);
+    // Phase 7 raised the document version to 2 and added the two growth collections; the user/favorite
+    // records themselves are unchanged apart from the two Phase 7 fields (§14).
+    expect(persisted.version).toBe(2);
     expect(persisted.users).toHaveLength(1);
     expect(Object.keys(persisted.users[0] ?? {}).sort()).toEqual([
       'chatId',
       'createdAt',
       'id',
+      'lastInteractionAt',
       'platform',
       'platformUserId',
+      'referralCode',
       'updatedAt',
     ]);
     expect(persisted.favorites[0]).toMatchObject({ symbol: 'EUR' });
+    expect(persisted.referrals).toEqual([]);
+    expect(persisted.rewards).toEqual([]);
   });
 });

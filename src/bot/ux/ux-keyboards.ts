@@ -35,7 +35,15 @@ const SECTION_EMOJI: Record<string, string> = {
   currency: '💵',
 };
 
-export function mainMenuKeyboard(): Keyboard {
+/**
+ * Main menu of the bot.
+ *
+ * Phase 7 adds exactly one row (`👥 دعوت از دوستان`) and only when the growth engine is enabled —
+ * the entry point is *inside* the existing menu, never a second menu or a replacement of one (§9.1).
+ */
+export function mainMenuKeyboard(
+  options: { referral?: boolean } = {},
+): Keyboard {
   return [
     [{ text: '💰 قیمت لحظهای', callbackData: callbackDataForScreen('prices') }],
     [
@@ -52,6 +60,16 @@ export function mainMenuKeyboard(): Keyboard {
         callbackData: callbackDataForScreen('favorites'),
       },
     ],
+    ...(options.referral
+      ? [
+          [
+            {
+              text: '👥 دعوت از دوستان',
+              callbackData: callbackDataForScreen('referral'),
+            },
+          ],
+        ]
+      : []),
     [
       {
         text: '📢 کانال اتابک',
@@ -143,9 +161,9 @@ export function dailyReportKeyboard(): Keyboard {
   ];
 }
 
-export function menuKeyboard(): Keyboard {
+export function menuKeyboard(options: { referral?: boolean } = {}): Keyboard {
   return [
-    ...mainMenuKeyboard(),
+    ...mainMenuKeyboard(options),
     [{ text: '🏠 منوی اصلی', callbackData: callbackDataForHome() }],
   ];
 }
@@ -163,6 +181,21 @@ export function favoritesKeyboard(): Keyboard {
       },
     ],
     ...screenFooter({ refreshScreen: 'favorites' }),
+  ];
+}
+
+/**
+ * The referral screen footer.
+ *
+ * * `shareLink` is a URL button that opens the platform's share sheet (a documented capability of
+ *   both platforms) — only when a link exists, so no dead button is ever rendered;
+ * * with no link configured the row is omitted entirely (the screen shows a <code> block with the
+ *   bot address instead of a button that cannot work) — no fabricated or placeholder URL, ever.
+ */
+export function referralKeyboard(link: string | null): Keyboard {
+  return [
+    ...(link ? [[{ text: '🔗 اشتراک‌گذاری لینک دعوت', url: link }]] : []),
+    ...screenFooter({ refreshScreen: 'referral' }),
   ];
 }
 

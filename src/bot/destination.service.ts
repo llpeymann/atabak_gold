@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { AppConfigService } from '../config/app-config.service';
 import { Keyboard } from '../platform/platform.types';
+import { referralPayloadFor } from '../referrals/referral-code';
 import { BotRoute } from './deep-link';
 
 /**
@@ -85,6 +86,54 @@ export class BotDestinationService {
   /** Capabilities of the platform (documented above), used by callers that need a safe fallback. */
   linkCapabilities(platform: 'bale' | 'telegram'): PlatformLinkCapabilities {
     return this.capabilities[platform];
+  }
+
+  /**
+   * Public bot username used for *referral* links of a platform (Phase 7 §4.2).
+   *
+   * Kept separately from the Phase 6 destination username because a product may point referral links at
+   * a different bot than the channel call-to-action. Empty or invalid = no referral link at all: the
+   * referral screen then explains what is missing instead of showing a guessed address.
+   */
+  referralBotUsername(platform: 'bale' | 'telegram'): string | null {
+    const configured =
+      platform === 'telegram'
+        ? this.config.telegramReferralBotUsername
+        : this.config.baleReferralBotUsername;
+    const normalized = configured.trim().replace(/^@/, '');
+
+    if (normalized.length === 0) {
+      return null;
+    }
+
+    if (!USERNAME_PATTERN.test(normalized)) {
+      this.logger.warn(
+        `Referral bot username configured for ${platform} is not a valid username; referral links stay disabled.`,
+      );
+
+      return null;
+    }
+
+    return normalized;
+  }
+
+  /**
+   * Referral link of a user code on one platform, or `null` when it cannot be built.
+   *
+   * The payload is `ref_<code>` — the same `?start=` mechanism Phase 6 already uses, so no platform
+   * semantics are invented here (Bale sends it as `/start ref_<code>`, Telegram as the deep-link
+   * parameter, §4.2).
+   */
+  referralLink(platform: 'bale' | 'telegram', code: string): string | null {
+    const username = this.referralBotUsername(platform);
+
+    if (!username || !this.capabilities[platform].deepLinks) {
+      return null;
+    }
+
+    const host = platform === 'telegram' ? 'https://t.me' : 'https://ble.ir';
+
+    return `${host}/${username}?start=${encodeURIComponent(referralPayloadFor(code))}`;
   }
 
   /**

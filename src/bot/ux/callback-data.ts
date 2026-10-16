@@ -29,7 +29,9 @@ export type ScreenKey =
   | 'last-update'
   | 'favorites'
   | 'alerts'
-  | 'channel';
+  | 'channel'
+  // Phase 7 — growth engine (referral screen). Child of the main menu, like the other hubs.
+  | 'referral';
 
 export const SCREEN_KEYS: readonly ScreenKey[] = [
   'prices',
@@ -43,6 +45,7 @@ export const SCREEN_KEYS: readonly ScreenKey[] = [
   'favorites',
   'alerts',
   'channel',
+  'referral',
 ];
 
 /** Alert actions exposed by buttons (Phase 3 §23–§40). */

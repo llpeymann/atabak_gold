@@ -48,6 +48,12 @@ export type UxEvent =
   | 'alert_invalid_target'
   | 'alert_wizard_input'
   | 'channel_clicked'
+  // Phase 7 — growth engine: a referral screen was opened, or a referral payload was handled.
+  // Only facts are recorded (never a code, a link or another user's identity).
+  | 'referral_open'
+  | 'referral_join_recorded'
+  | 'referral_join_rejected'
+  | 'referral_reward_granted'
   | 'back'
   | 'home'
   | 'invalid_callback'

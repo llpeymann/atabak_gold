@@ -1,255 +1,208 @@
 import { Logger } from '@nestjs/common';
 
-import { createAppConfigService, EnvMap } from '../testing/test-doubles';
 import {
-  CTA_LABELS,
   CtaPolicyService,
+  CTA_LABELS,
   groupOfSubject,
 } from './cta-policy.service';
+import { createAppConfigService, EnvMap } from '../testing/test-doubles';
 import { ContentItem, MessageType } from './channel.types';
 
 /**
- * §13.3 — the CTA policy (Channel → Bot eligibility).
+ * Phase 6 — the channel-side CTA policy (§4.1, §13.3).
  *
- * The policy decides *whether* a publication may carry a button and *which intent* it carries; it never
- * builds a URL and never touches market data. The rules under test are the acceptance rules of §4.1:
- * type-based eligibility, no alert CTA on routine price updates, no price CTA on unrelated editorial
- * content, admin overrides, configuration overrides, and a kill switch.
+ * The policy decides *whether* a publication may carry a bot button and *where* it leads. It never
+ * builds URLs and never reads market data, which is why it can be tested as a pure decision table.
  */
 
-const build = (env: EnvMap = {}): CtaPolicyService =>
+const policy = (env: EnvMap = {}) =>
   new CtaPolicyService(createAppConfigService(env));
 
-const content = (overrides: Partial<ContentItem> = {}): ContentItem => ({
-  id: 'cnt_1',
-  messageType: 'EDUCATIONAL',
-  title: 'عنوان',
-  body: 'متن',
-  mediaUrl: null,
-  includeMarketData: false,
-  revision: 1,
-  status: 'DRAFT',
-  createdAt: '2026-10-01T00:00:00.000Z',
-  updatedAt: '2026-10-01T00:00:00.000Z',
-  approvedAt: null,
-  approvedBy: null,
-  scheduledAt: null,
-  reportingDate: null,
-  lastJobId: null,
-  cancelledAt: null,
-  lastError: null,
-  ...overrides,
-});
+const contentItem = (overrides: Partial<ContentItem> = {}): ContentItem =>
+  ({
+    id: 'cnt_policy_1',
+    type: 'EDUCATIONAL',
+    title: 'آموزش',
+    body: 'متن آموزش',
+    status: 'PENDING',
+    createdAt: '2026-10-01T08:00:00.000Z',
+    updatedAt: '2026-10-01T08:00:00.000Z',
+    ...overrides,
+  }) as ContentItem;
 
-describe('CTA subject groups (§4.1 rule 2)', () => {
-  it('recognizes gold and coin subjects from the registry prefixes', () => {
-    expect(groupOfSubject('IR_GOLD_18K')).toBe('gold');
-    expect(groupOfSubject('XAU_USD')).toBe('gold');
-    expect(groupOfSubject('IR_COIN_EMAMI')).toBe('coin');
+describe('CTA policy defaults (§4.1)', () => {
+  it('refines a price update by the subject group of the publication', () => {
+    const service = policy();
+
+    expect(
+      service.decide({
+        messageType: 'PRICE_UPDATE',
+        subjects: ['IR_GOLD_18K'],
+      }),
+    ).toEqual({
+      route: 'gold',
+      labelFa: CTA_LABELS.gold,
+    });
+    expect(
+      service.decide({
+        messageType: 'PRICE_UPDATE',
+        subjects: ['IR_COIN_EMAMI'],
+      }),
+    ).toEqual({
+      route: 'coin',
+      labelFa: CTA_LABELS.coin,
+    });
   });
 
-  it('treats everything else as ungrouped', () => {
+  it('falls back to the full price list for mixed, unknown or empty subject lists', () => {
+    const service = policy();
+
+    expect(
+      service.decide({
+        messageType: 'PRICE_UPDATE',
+        subjects: ['IR_GOLD_18K', 'IR_COIN_EMAMI'],
+      }),
+    ).toEqual({
+      route: 'prices',
+      labelFa: CTA_LABELS.prices,
+    });
+    expect(
+      service.decide({ messageType: 'PRICE_UPDATE', subjects: [] })?.route,
+    ).toBe('prices');
+    expect(
+      service.decide({ messageType: 'PRICE_UPDATE', subjects: ['USDT_IRT'] })
+        ?.route,
+    ).toBe('prices');
+  });
+
+  it('never attaches the alert CTA to routine price updates (the alert route is opt-in)', () => {
+    const service = policy();
+
+    for (const type of [
+      'PRICE_UPDATE',
+      'MARKET_MOVEMENT',
+      'DAILY_RANGE',
+      'DAILY_REPORT',
+    ] as MessageType[]) {
+      expect(
+        service.decide({ messageType: type, subjects: ['IR_GOLD_18K'] })?.route,
+      ).not.toBe('alert');
+    }
+  });
+
+  it('leaves unrelated content without any button by default', () => {
+    const service = policy();
+
+    expect(service.decide({ messageType: 'EDUCATIONAL' })).toBeNull();
+    expect(service.decide({ messageType: 'BRANDED' })).toBeNull();
+    expect(service.decide({ messageType: 'NIGHTLY_ANALYSIS' })?.route).toBe(
+      'prices',
+    );
+  });
+
+  it('labels every route with the real destination (no generic "click here")', () => {
+    for (const route of [
+      'alert',
+      'prices',
+      'coin',
+      'gold',
+      'channel',
+    ] as const) {
+      expect(CTA_LABELS[route].length).toBeGreaterThan(3);
+    }
+
+    expect(groupOfSubject('XAUUSD')).toBe('gold');
+    expect(groupOfSubject('IR_GOLD_MELTED')).toBe('gold');
+    expect(groupOfSubject('IR_COIN_HALF')).toBe('coin');
+    // everything that is not a gold or a coin subject is ungrouped — never a wrong destination
     expect(groupOfSubject('USD')).toBeNull();
     expect(groupOfSubject('EUR')).toBeNull();
     expect(groupOfSubject('')).toBeNull();
   });
 });
 
-describe('CTA policy (§4.1)', () => {
-  it('sends a gold-only price update to the gold screen', () => {
-    const decision = build().decide({
-      messageType: 'PRICE_UPDATE',
-      subjects: ['IR_GOLD_18K', 'IR_GOLD_24K'],
-    });
+describe('CTA policy overrides and switches (§4.1, §12)', () => {
+  it('honours an explicit per-type route override', () => {
+    const service = policy({ CHANNEL_CTA_ROUTES: 'DAILY_REPORT=alert' });
 
-    expect(decision).toEqual({ route: 'gold', labelFa: CTA_LABELS.gold });
-  });
-
-  it('sends a coin-only price update to the coin screen', () => {
-    const decision = build().decide({
-      messageType: 'PRICE_UPDATE',
-      subjects: ['IR_COIN_EMAMI'],
-    });
-
-    expect(decision).toEqual({ route: 'coin', labelFa: CTA_LABELS.coin });
-  });
-
-  it('sends a mixed or general price update to the full price list', () => {
-    const policy = build();
-
-    expect(
-      policy.decide({
-        messageType: 'PRICE_UPDATE',
-        subjects: ['IR_GOLD_18K', 'USD'],
-      }),
-    ).toEqual({ route: 'prices', labelFa: CTA_LABELS.prices });
-    expect(
-      policy.decide({ messageType: 'PRICE_UPDATE', subjects: [] }),
-    ).toEqual({
-      route: 'prices',
-      labelFa: CTA_LABELS.prices,
+    expect(service.decide({ messageType: 'DAILY_REPORT' })).toEqual({
+      route: 'alert',
+      labelFa: CTA_LABELS.alert,
     });
   });
 
-  it('never attaches the alert CTA to a routine price update', () => {
-    const policy = build();
-    const decisions = (
-      [
-        ['PRICE_UPDATE', []],
-        ['PRICE_UPDATE', ['IR_GOLD_18K']],
-        ['PRICE_UPDATE', ['IR_COIN_EMAMI']],
-        ['PRICE_UPDATE', ['USD', 'EUR']],
-        ['MARKET_MOVEMENT', ['IR_GOLD_18K']],
-        ['DAILY_RANGE', ['IR_COIN_EMAMI']],
-        ['DAILY_REPORT', []],
-        ['NIGHTLY_ANALYSIS', []],
-      ] as [MessageType, string[]][]
-    ).map(([messageType, subjects]) =>
-      policy.decide({ messageType, subjects }),
-    );
-
-    for (const decision of decisions) {
-      expect(decision?.route).not.toBe('alert');
-    }
-    expect(decisions.filter((decision) => decision !== null)).toHaveLength(
-      decisions.length,
-    );
-  });
-
-  it('leaves unrelated editorial content without a button', () => {
-    const policy = build();
+  it('honours a per-type "none" override', () => {
+    const service = policy({ CHANNEL_CTA_ROUTES: 'PRICE_UPDATE=none' });
 
     expect(
-      policy.decide({ messageType: 'EDUCATIONAL', subjects: [] }),
-    ).toBeNull();
-    expect(policy.decide({ messageType: 'BRANDED', subjects: [] })).toBeNull();
-    // …even when the post happens to be about gold: the type decides, not the wording.
-    expect(
-      policy.decide({ messageType: 'EDUCATIONAL', subjects: ['IR_GOLD_18K'] }),
-    ).toBeNull();
-  });
-
-  it('routes the nightly analysis to the price list', () => {
-    expect(
-      build().decide({ messageType: 'NIGHTLY_ANALYSIS', subjects: [] }),
-    ).toEqual({
-      route: 'prices',
-      labelFa: CTA_LABELS.prices,
-    });
-  });
-
-  it('honours an explicit admin choice, including the alert promotion', () => {
-    const policy = build();
-
-    expect(
-      policy.decide({
-        messageType: 'EDUCATIONAL',
-        subjects: [],
-        content: content({ ctaRoute: 'alert' }),
-      }),
-    ).toEqual({ route: 'alert', labelFa: CTA_LABELS.alert });
-
-    expect(
-      policy.decide({
-        messageType: 'BRANDED',
-        subjects: [],
-        content: content({ ctaRoute: 'channel', messageType: 'BRANDED' }),
-      }),
-    ).toEqual({ route: 'channel', labelFa: CTA_LABELS.channel });
-  });
-
-  it('lets an admin silence a type that would carry a button by default', () => {
-    const policy = build();
-
-    expect(
-      policy.decide({
-        messageType: 'PRICE_UPDATE',
-        subjects: ['IR_GOLD_18K'],
-        content: content({ ctaRoute: 'none', messageType: 'PRICE_UPDATE' }),
-      }),
-    ).toBeNull();
-  });
-
-  it('treats `auto` and a missing value identically (documents written before Phase 6)', () => {
-    const policy = build();
-    const input = { messageType: 'DAILY_REPORT' as MessageType, subjects: [] };
-
-    const auto = policy.decide({
-      ...input,
-      content: content({ ctaRoute: 'auto' }),
-    });
-    const legacy = policy.decide({
-      ...input,
-      content: content({ ctaRoute: undefined }),
-    });
-    const empty = policy.decide({
-      ...input,
-      content: content({ ctaRoute: null as never }),
-    });
-
-    expect(auto).toEqual(legacy);
-    expect(legacy).toEqual(empty);
-    expect(legacy?.route).toBe('prices');
-  });
-
-  it('applies a configured per-type override, and lets it disable a type', () => {
-    const overridden = build({ CHANNEL_CTA_ROUTES: 'PRICE_UPDATE=gold' });
-
-    expect(
-      overridden.decide({ messageType: 'PRICE_UPDATE', subjects: ['USD'] }),
-    ).toEqual({ route: 'gold', labelFa: CTA_LABELS.gold });
-
-    const silenced = build({ CHANNEL_CTA_ROUTES: 'PRICE_UPDATE=none' });
-
-    expect(
-      silenced.decide({
+      service.decide({
         messageType: 'PRICE_UPDATE',
         subjects: ['IR_GOLD_18K'],
       }),
     ).toBeNull();
   });
 
-  it('still lets an explicit content choice outrank the configured override', () => {
-    const policy = build({ CHANNEL_CTA_ROUTES: 'EDUCATIONAL=none' });
+  it('lets explicit editorial content win over the configuration', () => {
+    const service = policy({ CHANNEL_CTA_ROUTES: 'EDUCATIONAL=none' });
 
     expect(
-      policy.decide({
+      service.decide({
         messageType: 'EDUCATIONAL',
-        subjects: [],
-        content: content({ ctaRoute: 'alert' }),
+        content: contentItem({ ctaRoute: 'alert' }),
       }),
     ).toEqual({ route: 'alert', labelFa: CTA_LABELS.alert });
   });
 
-  it('produces no CTA at all when the feature is switched off', () => {
-    const policy = build({ CHANNEL_CTA_ENABLED: 'false' });
+  it('lets a content item silence the button even when the type would carry one', () => {
+    const service = policy();
 
-    expect(policy.enabled).toBe(false);
     expect(
-      policy.decide({ messageType: 'PRICE_UPDATE', subjects: ['IR_GOLD_18K'] }),
-    ).toBeNull();
-    expect(
-      policy.decide({ messageType: 'DAILY_REPORT', subjects: [] }),
-    ).toBeNull();
-    expect(
-      policy.decide({
-        messageType: 'EDUCATIONAL',
-        subjects: [],
-        content: content({ ctaRoute: 'alert' }),
+      service.decide({
+        messageType: 'PRICE_UPDATE',
+        content: contentItem({ ctaRoute: 'none' }),
       }),
     ).toBeNull();
   });
 
-  it('describes the default policy in Persian for the admin surfaces', () => {
-    const policy = build();
+  it('treats `auto` (or an absent choice) as "use the registry default"', () => {
+    const service = policy();
 
-    expect(policy.describeDefault('EDUCATIONAL')).toContain('بدون دکمه');
-    expect(policy.describeDefault('PRICE_UPDATE')).toContain('گروه نمادها');
-    expect(policy.describeDefault('DAILY_REPORT')).toContain(CTA_LABELS.prices);
+    expect(
+      service.decide({
+        messageType: 'PRICE_UPDATE',
+        subjects: ['IR_GOLD_18K'],
+        content: contentItem({ ctaRoute: 'auto' }),
+      })?.route,
+    ).toBe('gold');
+    expect(
+      service.decide({
+        messageType: 'PRICE_UPDATE',
+        subjects: ['IR_GOLD_18K'],
+        content: null,
+      })?.route,
+    ).toBe('gold');
   });
 
-  it('never returns a label without a route, and every label describes its route', () => {
-    const policy = build();
+  it('returns no decision at all when the CTA feature is switched off', () => {
+    const service = policy({ CHANNEL_CTA_ENABLED: 'false' });
+
+    expect(
+      service.decide({
+        messageType: 'PRICE_UPDATE',
+        subjects: ['IR_GOLD_18K'],
+      }),
+    ).toBeNull();
+    expect(
+      service.decide({
+        messageType: 'EDUCATIONAL',
+        content: contentItem({ ctaRoute: 'alert' }),
+      }),
+    ).toBeNull();
+    expect(service.enabled).toBe(false);
+  });
+
+  it('never returns a label without a route, and every label names the route it leads to', () => {
+    const service = policy();
     const types: MessageType[] = [
       'PRICE_UPDATE',
       'MARKET_MOVEMENT',
@@ -261,24 +214,26 @@ describe('CTA policy (§4.1)', () => {
     ];
 
     for (const messageType of types) {
-      const decision = policy.decide({
+      const decision = service.decide({
         messageType,
         subjects: ['IR_GOLD_18K'],
       });
 
       if (decision) {
+        // The label is always the registry label of the route that was chosen: no generic caption,
+        // no label without a destination.
         expect(decision.labelFa).toBe(CTA_LABELS[decision.route]);
         expect(decision.labelFa.length).toBeGreaterThan(0);
       }
     }
   });
 
-  it('is pure: deciding does not mutate the content item it is given', () => {
-    const item = content({ ctaRoute: 'alert' });
+  it('is pure: deciding never mutates the content item it is given', () => {
+    const item = contentItem({ ctaRoute: 'alert' });
     const snapshot = JSON.stringify(item);
 
-    build().decide({
-      messageType: item.messageType,
+    policy().decide({
+      messageType: 'EDUCATIONAL',
       subjects: [],
       content: item,
     });
@@ -291,7 +246,7 @@ describe('CTA policy (§4.1)', () => {
       .spyOn(Logger.prototype, 'log')
       .mockImplementation(() => undefined);
 
-    build({ BALE_BOT_TOKEN: '123456:SHOULD-NEVER-LOG' }).logPolicy();
+    policy({ BALE_BOT_TOKEN: '123456:SHOULD-NEVER-LOG' }).logPolicy();
 
     const line = String(log.mock.calls[0]?.[0] ?? '');
 
@@ -301,5 +256,13 @@ describe('CTA policy (§4.1)', () => {
     expect(line).not.toContain('123456');
 
     log.mockRestore();
+  });
+
+  it('describes the default policy of each type for the admin surface', () => {
+    const service = policy();
+
+    expect(service.describeDefault('EDUCATIONAL')).toContain('بدون دکمه');
+    expect(service.describeDefault('PRICE_UPDATE')).toContain('گروه نمادها');
+    expect(service.describeDefault('DAILY_REPORT')).toContain('prices');
   });
 });

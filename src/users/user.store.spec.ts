@@ -148,6 +148,66 @@ describe('UserStore', () => {
     expect(store.listUsers()).toHaveLength(0);
   });
 
+  it('loads a document written before Phase 7 and upgrades it without losing data (§14)', async () => {
+    // A representative pre-Phase-7 document: no `version`, no `referrals`, no `rewards`, and users
+    // without the Phase 7 fields. Deploying Phase 7 must preserve every one of these records.
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        savedAt: '2026-10-01T00:00:00.000Z',
+        users: [
+          {
+            id: 'usr_legacy_1',
+            platform: 'bale',
+            platformUserId: '9001',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            updatedAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+        favorites: [
+          {
+            id: 'fav_legacy_1',
+            userId: 'usr_legacy_1',
+            symbol: 'IR_GOLD_18K',
+            createdAt: '2026-09-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      'utf-8',
+    );
+
+    const store = createStore();
+    await store.load();
+
+    const [user] = store.listUsers();
+
+    expect(user.id).toBe('usr_legacy_1');
+    // Missing Phase 3/Phase 7 fields are normalized, never invented (a missing chat id is not the id,
+    // a missing interaction timestamp is "no interaction" — the active-member metric reads inactive).
+    expect(user.chatId).toBeNull();
+    expect(user.lastInteractionAt).toBeNull();
+    expect(user.referralCode ?? null).toBeNull();
+    expect(store.listFavorites(user.id).map((f) => f.symbol)).toEqual([
+      'IR_GOLD_18K',
+    ]);
+    expect(store.listReferrals()).toHaveLength(0);
+
+    // The first write upgrades the document; the legacy record survives it.
+    await store.upsertUser('9002', 'bale');
+
+    const upgraded = JSON.parse(await readFile(filePath, 'utf-8')) as {
+      version: number;
+      users: { id: string }[];
+      referrals: unknown[];
+      rewards: unknown[];
+    };
+
+    expect(upgraded.version).toBe(2);
+    expect(upgraded.users.map((row) => row.id)).toContain('usr_legacy_1');
+    expect(upgraded.referrals).toEqual([]);
+    expect(upgraded.rewards).toEqual([]);
+  });
+
   it('runs in memory only when USER_DATA_FILE is empty', async () => {
     const store = new UserStore(createAppConfigService({ USER_DATA_FILE: '' }));
 

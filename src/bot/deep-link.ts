@@ -10,6 +10,7 @@
  * application, not user data (§12).
  */
 
+import { referralCodeFromPayload } from '../referrals/referral-code';
 import { ScreenKey } from './ux/callback-data';
 
 /** The five approved start routes (§6). */
@@ -34,6 +35,12 @@ export function isBotRoute(value: unknown): value is BotRoute {
 export const MAX_START_PAYLOAD_LENGTH = 32;
 
 /**
+ * Payload prefix of a referral link (Phase 7). `ref_` plus a code stays inside the same syntax and the
+ * same length bound as the five routes, so both platforms keep accepting it unchanged.
+ */
+export const REFERRAL_PAYLOAD_PREFIX = 'ref_';
+
+/**
  * Payload syntax: lowercase letters and digits with optional `_`/`-` separators. The five approved
  * payloads are plain lowercase words; the stricter pattern keeps unknown or hostile input out of the
  * routing decision *before* it is compared against the registry.
@@ -45,6 +52,12 @@ export type StartPayload =
   | { kind: 'none' }
   /** `/start <payload>` where the payload maps to an approved route. */
   | { kind: 'route'; route: BotRoute; raw: string }
+  /**
+   * `/start ref_<code>` — a referral link (Phase 7 §5). The payload only *names* a code: it grants
+   * nothing by itself, and the referral is validated, attributed and persisted by the referral
+   * service, never by the parser.
+   */
+  | { kind: 'referral'; code: string; raw: string }
   /** `/start <payload>` with a payload this product does not define. */
   | { kind: 'unknown'; raw: string };
 
@@ -80,9 +93,19 @@ export function parseStartPayload(
     return { kind: 'unknown', raw };
   }
 
-  return isBotRoute(normalized)
-    ? { kind: 'route', route: normalized, raw }
-    : { kind: 'unknown', raw };
+  if (isBotRoute(normalized)) {
+    return { kind: 'route', route: normalized, raw };
+  }
+
+  // Phase 7: `ref_<code>` is recognized *after* the five routes, so an existing payload can never be
+  // reinterpreted as a referral. A malformed referral payload stays `unknown` (logged, never acted on).
+  const referralCode = referralCodeFromPayload(normalized);
+
+  if (referralCode) {
+    return { kind: 'referral', code: referralCode, raw };
+  }
+
+  return { kind: 'unknown', raw };
 }
 
 /** Routes that open an existing bot screen. `alert` is executed separately (it starts the wizard). */

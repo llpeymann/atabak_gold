@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { isMoneyUnit, MoneyUnit } from '../common/money';
 import { buildSymbolRegistry, SymbolDefinition } from '../market/symbols';
 import {
+  REFERRAL_DEFAULTS,
   parseAdminUserIds,
   parseCtaRouteOverrides,
   parseMovementThresholdOverrides,
@@ -295,6 +296,66 @@ export class AppConfigService {
   /** In-memory alert wizard lifetime; an abandoned wizard is dropped after this. */
   get alertWizardTtlMs(): number {
     return this.readInteger('ALERT_WIZARD_TTL_MINUTES', 15) * 60_000;
+  }
+
+  // --- Phase 7: growth engine (referrals & rewards) ---
+
+  /** Master switch of the referral system (`false` = no new attribution, no new reward). */
+  get referralEnabled(): boolean {
+    return this.readBooleanFlag('REFERRAL_ENABLED', true);
+  }
+
+  /**
+   * Reward issuance switch, independent of {@link referralEnabled}: with rewards paused, referrals
+   * keep being recorded and the ledger catches up when issuance is switched back on (§12).
+   */
+  get referralRewardsEnabled(): boolean {
+    return this.readBooleanFlag('REFERRAL_REWARDS_ENABLED', true);
+  }
+
+  /** Successful referrals required per reward threshold (the frozen rule uses 3). */
+  get referralRewardsPerThreshold(): number {
+    return this.readInteger(
+      'REFERRAL_REWARDS_PER_THRESHOLD',
+      REFERRAL_DEFAULTS.rewardsPerThreshold,
+    );
+  }
+
+  /** Extra permanent alert slots added per earned reward (the frozen rule uses 1). */
+  get referralRewardBonusSlots(): number {
+    return this.readInteger(
+      'REFERRAL_REWARD_BONUS_SLOTS',
+      REFERRAL_DEFAULTS.bonusSlots,
+    );
+  }
+
+  /** Upper bound on the total bonus slots of one user (a bad config can never mean "unlimited"). */
+  get referralMaxBonusSlots(): number {
+    return this.readInteger('REFERRAL_MAX_BONUS_SLOTS', 50);
+  }
+
+  /** Rolling window used by the active-referred-member metric (reporting only). */
+  get referralActiveWindowMs(): number {
+    return (
+      this.readInteger(
+        'REFERRAL_ACTIVE_WINDOW_DAYS',
+        REFERRAL_DEFAULTS.activeWindowDays,
+      ) *
+      24 *
+      60 *
+      60 *
+      1000
+    );
+  }
+
+  /** Bot username used for Bale referral links (empty = not configured, no link shown). */
+  get baleReferralBotUsername(): string {
+    return this.readString('BALE_REFERRAL_BOT_USERNAME', '');
+  }
+
+  /** Bot username used for Telegram referral links (empty = not configured, no link shown). */
+  get telegramReferralBotUsername(): string {
+    return this.readString('TELEGRAM_REFERRAL_BOT_USERNAME', '');
   }
 
   /** Inbound interaction switch: `false` keeps the pre-Phase-2 publish-only behaviour. */

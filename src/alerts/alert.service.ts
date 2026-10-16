@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { AppConfigService } from '../config/app-config.service';
+import { AlertCapacityService } from './alert-capacity.service';
 import { SymbolDefinition } from '../market/symbols';
 import { MarketStateService } from '../market/market-state.service';
 import { UserStore } from '../users/user.store';
@@ -70,10 +71,26 @@ export class AlertService {
     private readonly store: AlertStore,
     private readonly marketState: MarketStateService,
     private readonly users: UserStore,
+    private readonly capacity: AlertCapacityService,
   ) {}
 
+  /**
+   * Configured base capacity — **not** the effective limit any more.
+   *
+   * Phase 7 adds permanent referral bonuses on top of this number. Everything that displays or
+   * enforces capacity must use {@link effectiveMaxAlerts} instead; this getter is kept because the
+   * effective limit is documented and shown relative to the configured base (§8.3).
+   */
   get maxAlerts(): number {
     return this.config.maxAlertsPerUser;
+  }
+
+  /**
+   * Capacity actually in force for one user: the configured base plus the permanent bonuses of the
+   * rewards that were applied (derived from the ledger on every read — no second counter).
+   */
+  effectiveMaxAlerts(userId: string): number {
+    return this.capacity.effectiveLimit(userId).limit;
   }
 
   // --- validation -------------------------------------------------------------
@@ -251,7 +268,10 @@ export class AlertService {
     const { definition, targetPrice, targetPercent, direction, baselinePrice } =
       validated;
 
-    const limit = this.maxAlerts;
+    // Read *inside* the same call, right before the critical section: the referral ledger can only
+    // raise this number, so a grant racing with a create can at worst reject a create that would have
+    // been accepted a moment later — never accept more alerts than the effective capacity allows.
+    const limit = this.effectiveMaxAlerts(userId);
     const now = new Date().toISOString();
 
     return this.store.transact((tx) => {

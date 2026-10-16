@@ -32,6 +32,9 @@ import {
 
 let updateId = 0;
 
+import { AlertCapacityService } from '../../alerts/alert-capacity.service';
+import { ReferralService } from '../../referrals/referral.service';
+
 const callback = (data: string): InboundCallback => ({
   kind: 'callback',
   updateId: ++updateId,
@@ -94,6 +97,12 @@ describe('market flow (integration)', () => {
       alertStore,
       market.marketState,
       store,
+      new AlertCapacityService(config, store),
+    );
+    const growth = new ReferralService(
+      config,
+      store,
+      new AlertCapacityService(config, store),
     );
     const botUx = new BotUxService(
       config,
@@ -109,6 +118,7 @@ describe('market flow (integration)', () => {
         new CtaPolicyService(config),
       ),
       new BotDestinationService(config),
+      growth,
     );
 
     // `priceService` only exists to prove it is never used.

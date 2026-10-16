@@ -31,7 +31,18 @@ export const REQUIRED_ENVIRONMENT_VARIABLES = [
   'BALE_CHANNEL_ID',
 ] as const;
 
-export const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
+/**
+ * Frozen defaults of the Phase 7 rules: three successful referrals per reward, one permanent alert
+ * slot per reward, a thirty-day activity window. They live here so that the environment defaults, the
+ * config service and the documentation all read the same numbers (§12).
+ */
+export const REFERRAL_DEFAULTS = {
+  rewardsPerThreshold: 3,
+  bonusSlots: 1,
+  activeWindowDays: 30,
+} as const;
+
+const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   PORT: '3000',
   PRICE_API_TIMEOUT_MS: '20000',
   PRICE_API_MAX_ATTEMPTS: '3',
@@ -129,6 +140,26 @@ export const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   CHANNEL_CTA_ROUTES: '',
   // Bot -> channel invitation row on the market-intelligence screens.
   BOT_CHANNEL_INVITE_ENABLED: 'true',
+
+  // --- Phase 7: growth engine (referrals & rewards) ---
+  // Master switch. `false` = no new referral registration, attribution, approval or reward; every
+  // existing user, referral and already granted capacity is preserved untouched.
+  REFERRAL_ENABLED: 'true',
+  // Reward issuance switch (permanent extra price-alert slots). Independent of REFERRAL_ENABLED:
+  // referrals keep being recorded while issuance is paused, and the ledger catches up on restart.
+  REFERRAL_REWARDS_ENABLED: 'true',
+  // Successful referrals required per reward, and permanent alert slots added per reward.
+  REFERRAL_REWARDS_PER_THRESHOLD: String(REFERRAL_DEFAULTS.rewardsPerThreshold),
+  REFERRAL_REWARD_BONUS_SLOTS: String(REFERRAL_DEFAULTS.bonusSlots),
+  // Rolling window (days) used by the "active referred member" metric. Reporting only.
+  REFERRAL_ACTIVE_WINDOW_DAYS: String(REFERRAL_DEFAULTS.activeWindowDays),
+  // Upper bound on bonus alert slots per user: a misconfigured threshold can never turn into an
+  // unlimited alert capacity.
+  REFERRAL_MAX_BONUS_SLOTS: '50',
+  // Bot destinations used to build referral links. Empty = the screen explains the missing
+  // configuration instead of showing a guessed or dead link.
+  BALE_REFERRAL_BOT_USERNAME: '',
+  TELEGRAM_REFERRAL_BOT_USERNAME: '',
 };
 
 const logger = new Logger('EnvironmentValidation');
@@ -470,6 +501,55 @@ export function parseCtaRouteOverrides(raw: unknown): Record<string, string> {
 }
 
 /** The seven registered message types, taken from the registry that defines them (single source). */
+/**
+ * Referral bot usernames follow the exact same shape as the Phase 6 deep-link destinations; the
+ * separate keys let operators point referral links at a different bot without touching the channel
+ * call-to-action. Blank is a valid, documented value (the referral screen then explains what is
+ * missing instead of showing a dead link).
+ */
+function readReferralBotUsername(
+  env: Record<string, unknown>,
+  key: string,
+): string {
+  return readBotUsername(env, key);
+}
+
+/**
+ * Validate the referral thresholds and produce the normalized values consumed by the config service.
+ *
+ * Rules: at least one full referral per reward (a `0`/negative value would make every user instantly
+ * eligible), a strictly positive bonus in slots, a positive active window (reporting), and an upper
+ * bound on bonus slots so a misconfigured `REFERRAL_MAX_BONUS_SLOTS` can never mean "unlimited" (§12).
+ */
+function validateReferralThresholds(env: Record<string, unknown>): void {
+  // The defaults are merged into `env` before validation, so these reads are always populated; the
+  // ranges are the real guard (a `0` per threshold would make every user instantly eligible).
+  env.REFERRAL_REWARDS_PER_THRESHOLD = readInteger(
+    env,
+    'REFERRAL_REWARDS_PER_THRESHOLD',
+    1,
+    10_000,
+  );
+  env.REFERRAL_REWARD_BONUS_SLOTS = readInteger(
+    env,
+    'REFERRAL_REWARD_BONUS_SLOTS',
+    1,
+    100,
+  );
+  env.REFERRAL_ACTIVE_WINDOW_DAYS = readInteger(
+    env,
+    'REFERRAL_ACTIVE_WINDOW_DAYS',
+    1,
+    3_650,
+  );
+  env.REFERRAL_MAX_BONUS_SLOTS = readInteger(
+    env,
+    'REFERRAL_MAX_BONUS_SLOTS',
+    1,
+    10_000,
+  );
+}
+
 function isMessageTypeName(value: string): boolean {
   return isMessageType(value);
 }
@@ -726,6 +806,23 @@ export function validateEnvironment(
     env,
     'BOT_CHANNEL_INVITE_ENABLED',
   );
+  // --- Phase 7: growth engine ---
+  env.REFERRAL_ENABLED = readBoolean(env, 'REFERRAL_ENABLED');
+  env.REFERRAL_REWARDS_ENABLED = readBoolean(env, 'REFERRAL_REWARDS_ENABLED');
+  env.BALE_REFERRAL_BOT_USERNAME = readReferralBotUsername(
+    env,
+    'BALE_REFERRAL_BOT_USERNAME',
+  );
+  env.TELEGRAM_REFERRAL_BOT_USERNAME = readReferralBotUsername(
+    env,
+    'TELEGRAM_REFERRAL_BOT_USERNAME',
+  );
+
+  if (readBoolean(env, 'REFERRAL_ENABLED') === 'true') {
+    // Thresholds are validated only for the platform that actually needs them (Bale is mandatory,
+    // Telegram is optional) — an unconfigured optional platform must never block startup.
+    validateReferralThresholds(env);
+  }
   parseAdminUserIds(env.CHANNEL_ADMIN_USER_IDS);
 
   env.ALERT_MIN_TARGET_PERCENT = readNumber(

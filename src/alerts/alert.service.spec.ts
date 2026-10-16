@@ -15,6 +15,8 @@ import {
   seedMarketState,
 } from '../testing/test-doubles';
 
+import { AlertCapacityService } from './alert-capacity.service';
+
 /**
  * Domain rules of the price alert service (Phase 3 §6–§40).
  *
@@ -39,11 +41,13 @@ function createStack(env: EnvMap = {}): Stack {
   const alertStore = new AlertStore(config);
   const userStore = new UserStore(config);
   const users = new UserService(config, userStore);
+  const capacity = new AlertCapacityService(config, userStore);
   const service = new AlertService(
     config,
     alertStore,
     market.marketState,
     userStore,
+    capacity,
   );
 
   return { config, market, alertStore, users, userStore, service };

@@ -25,6 +25,11 @@ import {
 import { ContentAdminService } from '../content/content-admin.service';
 import { BotDestinationService } from '../destination.service';
 import { parseStartPayload, screenForRoute } from '../deep-link';
+import {
+  ReferralService,
+  ReferrerNotice,
+} from '../../referrals/referral.service';
+import { ReferralOutcome } from '../../referrals/referral.types';
 import { AlertTypeKey } from './alert-callback.types';
 import { AlertService } from '../../alerts/alert.service';
 import {
@@ -71,6 +76,10 @@ import {
   formatUnknownStartScreen,
   formatPriceScreen,
   formatWelcomeScreen,
+  formatReferralDisabledScreen,
+  formatReferralScreen,
+  formatReferralWelcomeNote,
+  formatRewardGrantedNotice,
 } from './ux-format';
 import {
   alertCanceledKeyboard,
@@ -93,10 +102,16 @@ import {
   mainMenuKeyboard,
   menuKeyboard,
   pricesKeyboard,
+  referralKeyboard,
   sectionKeyboard,
 } from './ux-keyboards';
 
 /** Logical screens; `menu` and `favorites-manage` are navigation states, not callbacks (§39). */
+/** Referral outcomes a user-facing note exists for (the rest show the plain welcome screen). */
+type ReferralNoteKind = 'joined' | 'existing' | 'self';
+
+type ReferralOutcomeKind = ReferralOutcome['kind'];
+
 type UxScreen =
   | ScreenKey
   | 'menu'
@@ -163,6 +178,13 @@ export class BotUxService {
   private readonly logger = new Logger(BotUxService.name);
   /** Navigation state is intentionally in-memory: it may reset on restart (§33). */
   private readonly sessions = new Map<string, NavigationState>();
+  /**
+   * One-shot user-facing note about the referral of this very update (Phase 7).
+   *
+   * In memory like `sessions`: losing it after a restart only means the user sees the normal welcome
+   * screen without the extra sentence — no referral data lives here.
+   */
+  private readonly referralNotes = new Map<string, ReferralNoteKind>();
 
   constructor(
     private readonly config: AppConfigService,
@@ -173,6 +195,8 @@ export class BotUxService {
     private readonly alerts: AlertService,
     private readonly contentAdmin: ContentAdminService,
     private readonly destinations: BotDestinationService,
+    // Phase 7 — growth engine. Injected as `growth` because the router already has a `users`.
+    private readonly growth: ReferralService,
   ) {}
 
   /** Entry point used by the inbound poller (and by tests). Never throws for bad input. */
@@ -195,23 +219,155 @@ export class BotUxService {
     }
 
     try {
-      const user = await this.users.resolveUser(
-        update.platform,
-        update.platformUserId,
-        update.chatId,
-      );
+      // Phase 7 — a referral arrival is handled *before* the generic registration: the referral must
+      // be recorded in the same write as the registration, and "was this identity new?" can only be
+      // answered before that write (§5.1, §6.1).
+      const referralCode = this.referralCodeOf(update);
+      const referralResult = referralCode
+        ? await this.growth.handleStartReferral({
+            platform: update.platform,
+            platformUserId: update.platformUserId,
+            chatId: update.chatId,
+            code: referralCode,
+          })
+        : null;
+
+      const user =
+        referralResult?.user ??
+        (await this.users.resolveUser(
+          update.platform,
+          update.platformUserId,
+          update.chatId,
+        ));
+
+      if (referralResult) {
+        this.recordReferralEvent(
+          referralResult.outcome.kind,
+          user.id,
+          update.platform,
+        );
+
+        const note = this.referralNoteFor(referralResult.outcome.kind);
+
+        if (note) {
+          this.referralNotes.set(user.id, note);
+        }
+      }
+
+      // A stable referral code is assigned on the first update that has no code yet: existing users
+      // are therefore migrated lazily and collision-safely, without a bulk rewrite of the document.
+      if (this.growth.enabled) {
+        await this.growth.referralCodeFor(user.id);
+      }
 
       if (update.kind === 'callback') {
         await this.handleCallback(adapter, user, update);
       } else {
         await this.handleMessage(adapter, user, update);
       }
+
+      // Phase 7 — the reward message to the inviter is delivered only after the grant was persisted,
+      // through the same platform adapter as every other message. A failure here never reverses a
+      // grant and never duplicates it.
+      if (referralResult?.referrerNotice) {
+        await this.deliverReferrerNotice(referralResult.referrerNotice);
+      }
+
+      // Phase 7 — activity is recorded last and only for an update that was actually processed as a
+      // real user action. Automated deliveries, scheduled publications and rejected payloads never
+      // reach this line, which is what keeps the active-member metric meaningful (§1.2).
+      await this.growth.touchActivity(user.id);
     } catch (error) {
       // The user gets a safe message; the technical detail stays server-side (§24, §49).
       this.logger.error(
         `Failed to handle update ${update.updateId} on ${update.platform}: ${describeError(error)}`,
       );
       await this.sendSafeFailure(adapter, update);
+    }
+  }
+
+  // --- Phase 7: growth engine (referral arrival) -------------------------------
+
+  /**
+   * The referral code carried by this update, or `null`.
+   *
+   * Only a plain message whose *first* token is `/start` is considered, and only the payload the
+   * Phase 6 parser classifies as a referral — a callback, a forwarded text or a second token can
+   * therefore never start an attribution (§5.1, §13.1).
+   */
+  private referralCodeOf(update: InboundUpdate): string | null {
+    if (update.kind !== 'message') {
+      return null;
+    }
+
+    const payload = parseStartPayload(update.text);
+
+    return payload.kind === 'referral' ? payload.code : null;
+  }
+
+  /** Log the *fact* of a referral arrival. No code, link or third-party identity is ever logged. */
+  private recordReferralEvent(
+    kind: ReferralOutcomeKind,
+    userId: string,
+    platform: Platform,
+  ): void {
+    const base = { platform, userId };
+
+    switch (kind) {
+      case 'joined':
+        this.events.record('referral_join_recorded', base);
+        return;
+      case 'self-referral':
+      case 'existing-user':
+      case 'unknown-code':
+      case 'persist-failed':
+        // Every non-counted arrival is recorded as a rejection: honest statistics, and a diagnosable
+        // trail for a link that looks broken to users (§5.4, §13.3).
+        this.events.record('referral_join_rejected', { ...base, screen: kind });
+        return;
+      case 'disabled':
+        return;
+    }
+  }
+
+  /**
+   * Deliver the inviter's congratulation message.
+   *
+   * The grant is already persisted when this runs (the referral service returns the notice only after
+   * a successful write), so a delivery failure is logged and nothing else happens: no reversal, no
+   * retry loop that could duplicate the message, and the number stays visible in the referral screen.
+   */
+  private async deliverReferrerNotice(notice: ReferrerNotice): Promise<void> {
+    if (!notice.chatId) {
+      this.logger.warn(
+        `Referral reward notice for ${notice.userId} skipped: no delivery chat is known yet.`,
+      );
+      return;
+    }
+
+    const adapter = this.platformRegistry.resolve(notice.platform);
+
+    if (!adapter) {
+      this.logger.warn(
+        `Referral reward notice for ${notice.userId} skipped: ${notice.platform} is not configured.`,
+      );
+      return;
+    }
+
+    try {
+      await adapter.render({
+        chatId: notice.chatId,
+        text: formatRewardGrantedNotice(notice),
+        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
+      });
+      this.events.record('referral_reward_granted', {
+        platform: notice.platform,
+        userId: notice.userId,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Could not deliver the referral reward notice to ${notice.userId}: ${describeError(error)}`,
+      );
     }
   }
 
@@ -243,7 +399,7 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: menuKeyboard(),
+        keyboard: menuKeyboard({ referral: this.growth.enabled }),
       });
       return;
     }
@@ -281,7 +437,7 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatMenuScreen(),
-        keyboard: mainMenuKeyboard(),
+        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
       });
       return;
     }
@@ -296,7 +452,7 @@ export class BotUxService {
     await adapter.render({
       chatId: message.chatId,
       text: formatMenuScreen(),
-      keyboard: menuKeyboard(),
+      keyboard: menuKeyboard({ referral: this.growth.enabled }),
     });
   }
 
@@ -507,6 +663,11 @@ export class BotUxService {
           case 'channel':
             this.events.record('channel_clicked', base);
             return;
+          // Phase 7 — opening the referral screen. Only the *fact* is logged: no code, no link and
+          // no invitee data ever reach the event log.
+          case 'referral':
+            this.events.record('referral_open', base);
+            return;
           default:
             return;
         }
@@ -525,6 +686,22 @@ export class BotUxService {
     }
   }
 
+  /** Map a referral outcome to the one-shot note kind the welcome screen understands. */
+  private referralNoteFor(kind: ReferralOutcomeKind): ReferralNoteKind | null {
+    switch (kind) {
+      case 'joined':
+        return 'joined';
+      case 'existing-user':
+        return 'existing';
+      case 'self-referral':
+        return 'self';
+      // `unknown-code`, `disabled` and `persist-failed` show the normal welcome screen: nothing is
+      // claimed to the user that was not recorded.
+      default:
+        return null;
+    }
+  }
+
   // --- rendering --------------------------------------------------------------
 
   private renderScreen(
@@ -540,7 +717,7 @@ export class BotUxService {
         return {
           screen: 'menu',
           text: formatMenuScreen(),
-          keyboard: menuKeyboard(),
+          keyboard: menuKeyboard({ referral: this.growth.enabled }),
         };
 
       case 'prices': {
@@ -672,6 +849,35 @@ export class BotUxService {
       case 'alert-created':
         return this.renderAlertCreated(userId, params.alertId ?? null);
 
+      case 'referral': {
+        // Phase 7: everything shown here is read from persistence (§7); no cached counters, no
+        // optimistic numbers. A disabled engine explains itself instead of disappearing.
+        if (!this.growth.enabled) {
+          return {
+            screen: 'referral',
+            text: formatReferralDisabledScreen(),
+            keyboard: referralKeyboard(null),
+          };
+        }
+
+        const context = this.growth.referralContext(userId);
+
+        if (!context) {
+          return this.expiredScreen();
+        }
+
+        const stats = this.growth.statsFor(userId);
+        const link = context.code
+          ? this.destinations.referralLink(context.platform, context.code)
+          : null;
+
+        return {
+          screen: 'referral',
+          text: formatReferralScreen(stats, link),
+          keyboard: referralKeyboard(link),
+        };
+      }
+
       case 'channel': {
         // Phase 6: a missing channel destination is answered with an explanation instead of a button
         // that cannot work (§7 rule 8).
@@ -746,7 +952,7 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: formatWelcomeScreen(),
-        keyboard: mainMenuKeyboard(),
+        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
       });
       return;
     }
@@ -765,7 +971,26 @@ export class BotUxService {
       await adapter.render({
         chatId: message.chatId,
         text: `${formatUnknownStartScreen()}\n\n${formatMenuScreen()}`,
-        keyboard: menuKeyboard(),
+        keyboard: menuKeyboard({ referral: this.growth.enabled }),
+      });
+      return;
+    }
+
+    if (payload.kind === 'referral') {
+      // The attribution itself already happened *before* the session was resolved (see
+      // `handleUpdate`), because a referral must be recorded in the same write as the registration.
+      // Here only the user-facing part remains: the normal welcome/menu (plus a one-line note when
+      // there is something to explain). A referral link can therefore never block or replace the
+      // normal start flow (§5.4).
+      const note = this.referralNotes.get(user.id) ?? null;
+      this.referralNotes.delete(user.id);
+      this.remember(user.id, 'menu');
+      await adapter.render({
+        chatId: message.chatId,
+        text: note
+          ? `${formatReferralWelcomeNote(note)}\n\n${formatWelcomeScreen()}`
+          : formatWelcomeScreen(),
+        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
       });
       return;
     }
@@ -916,7 +1141,7 @@ export class BotUxService {
         if (!result.ok) {
           return this.render(adapter, callback, {
             screen: 'alert-detail',
-            text: this.alertFailureText(result.reason),
+            text: this.alertFailureText(result.reason, user.id),
             keyboard: alertDetailKeyboard(alert.status, alert.id),
           });
         }
@@ -1032,7 +1257,7 @@ export class BotUxService {
         });
         return this.render(adapter, callback, {
           screen: 'alert-detail',
-          text: this.alertFailureText(result.reason),
+          text: this.alertFailureText(result.reason, user.id),
           keyboard: alertDetailKeyboard('ACTIVE', wizard.editAlertId),
         });
       }
@@ -1061,7 +1286,7 @@ export class BotUxService {
 
     if (!result.ok) {
       if (result.reason === 'LIMIT_REACHED') {
-        const limit = result.limit ?? this.alerts.maxAlerts;
+        const limit = result.limit ?? this.alerts.effectiveMaxAlerts(user.id);
         this.events.record('alert_limit_reached', {
           platform: adapter.platform,
           userId: user.id,
@@ -1090,7 +1315,7 @@ export class BotUxService {
 
       return this.render(adapter, callback, {
         screen: 'alert-wizard',
-        text: this.alertFailureText(result.reason),
+        text: this.alertFailureText(result.reason, user.id),
         keyboard: alertCanceledKeyboard(),
       });
     }
@@ -1139,7 +1364,7 @@ export class BotUxService {
       this.clearWizard(user.id);
       await adapter.render({
         chatId: message.chatId,
-        text: this.alertFailureText('UNKNOWN_SYMBOL'),
+        text: this.alertFailureText('UNKNOWN_SYMBOL', user.id),
         keyboard: alertCanceledKeyboard(),
       });
       return true;
@@ -1170,7 +1395,7 @@ export class BotUxService {
         this.clearWizard(user.id);
         await adapter.render({
           chatId: message.chatId,
-          text: this.alertFailureText(check.reason),
+          text: this.alertFailureText(check.reason, user.id),
           keyboard: alertCanceledKeyboard(),
         });
         return true;
@@ -1292,10 +1517,14 @@ export class BotUxService {
     };
   }
 
-  private alertFailureText(reason: string): string {
+  /**
+   * Failure text of an alert action — the capacity sentence always quotes the *effective* limit of
+   * that user (configured base + applied referral bonuses, §8.3), never the raw configuration value.
+   */
+  private alertFailureText(reason: string, userId: string): string {
     switch (reason) {
       case 'LIMIT_REACHED':
-        return formatAlertLimitReached(this.alerts.maxAlerts);
+        return formatAlertLimitReached(this.alerts.effectiveMaxAlerts(userId));
       case 'DUPLICATE':
         return ALERT_TEXTS.duplicate;
       case 'NO_VALID_PRICE':
@@ -1342,7 +1571,7 @@ export class BotUxService {
       alerts,
       resolved,
       displayUnit,
-      this.alerts.maxAlerts,
+      this.alerts.effectiveMaxAlerts(userId),
     );
 
     return {

@@ -7,6 +7,8 @@ import { HttpService } from '@nestjs/axios';
 import { BaleService } from '../bale/bale.service';
 import { DeliveryResult } from '../bale/delivery-result';
 import { AlertNotificationService } from '../alerts/alert-notification.service';
+import { AlertCapacityService } from '../alerts/alert-capacity.service';
+import { ReferralService } from '../referrals/referral.service';
 import { AlertService } from '../alerts/alert.service';
 import { AlertStore } from '../alerts/alert.store';
 import { BotUxService } from '../bot/ux/bot-ux.service';
@@ -833,6 +835,10 @@ export interface UxHarness {
   notifications: AlertNotificationService;
   channel: ChannelHarness;
   botUx: BotUxService;
+  /** Phase 7 — growth engine (referral codes, attribution, rewards, statistics). */
+  growth: ReferralService;
+  /** Phase 7 — effective alert capacity derived from the reward ledger. */
+  capacity: AlertCapacityService;
   /** Rendered platform calls of a given kind. */
   rendered: () => PlatformCall[];
   /** Newest rendered message (send or edit). */
@@ -871,11 +877,14 @@ export function createUxHarness(
     { market, platform, config },
   );
   const alertStore = options.alertStore ?? new AlertStore(config);
+  const capacity = new AlertCapacityService(config, store);
+  const growth = new ReferralService(config, store, capacity);
   const alerts = new AlertService(
     config,
     alertStore,
     market.marketState,
     store,
+    capacity,
   );
   const notifications = new AlertNotificationService(
     config,
@@ -893,6 +902,7 @@ export function createUxHarness(
     alerts,
     channel.contentAdmin,
     channel.destinations,
+    growth,
   );
 
   const rendered = (): PlatformCall[] =>
@@ -913,6 +923,8 @@ export function createUxHarness(
     notifications,
     channel,
     botUx,
+    growth,
+    capacity,
     rendered,
     last: () => {
       const all = rendered();
