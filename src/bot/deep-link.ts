@@ -10,6 +10,7 @@
  * application, not user data (§12).
  */
 
+import { tokenFromPayload } from '../campaigns/campaign-token';
 import { referralCodeFromPayload } from '../referrals/referral-code';
 import { ScreenKey } from './ux/callback-data';
 
@@ -58,6 +59,13 @@ export type StartPayload =
    * service, never by the parser.
    */
   | { kind: 'referral'; code: string; raw: string }
+  /**
+   * `/start c_cmp…` — a tracked campaign link (Phase 8 §7.5).
+   *
+   * Like a referral payload it only *names* a campaign token; authorization, accept/refuse and the
+   * funnel record are decided by the campaign services, never by the parser.
+   */
+  | { kind: 'campaign'; token: string; raw: string }
   /** `/start <payload>` with a payload this product does not define. */
   | { kind: 'unknown'; raw: string };
 
@@ -103,6 +111,14 @@ export function parseStartPayload(
 
   if (referralCode) {
     return { kind: 'referral', code: referralCode, raw };
+  }
+
+  // Phase 8: `c_cmp…` is recognized last for the same reason — an existing payload can never be
+  // reinterpreted as a campaign. An unknown or malformed token stays `unknown` and is never acted on.
+  const campaignToken = tokenFromPayload(normalized);
+
+  if (campaignToken) {
+    return { kind: 'campaign', token: campaignToken, raw };
   }
 
   return { kind: 'unknown', raw };

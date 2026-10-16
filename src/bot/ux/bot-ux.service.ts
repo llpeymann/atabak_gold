@@ -17,14 +17,17 @@ import {
 import {
   AlertCallbackAction,
   CallbackAction,
+  isCampaignAction,
   isAlertAction,
   isContentAction,
   parseCallbackData,
   ScreenKey,
 } from './callback-data';
 import { ContentAdminService } from '../content/content-admin.service';
+import { CampaignAdminService } from '../campaign/campaign-admin.service';
+import { CampaignTrackingService } from '../../campaigns/campaign-tracking.service';
 import { BotDestinationService } from '../destination.service';
-import { parseStartPayload, screenForRoute } from '../deep-link';
+import { BotRoute, parseStartPayload, screenForRoute } from '../deep-link';
 import {
   ReferralService,
   ReferrerNotice,
@@ -66,6 +69,7 @@ import { UxEventLogService } from './ux-event-log.service';
 import {
   formatChannelInviteLine,
   formatChannelScreen,
+  formatCampaignUnavailableScreen,
   formatChannelUnavailableScreen,
   formatEmptySection,
   formatExpiredCallback,
@@ -197,6 +201,10 @@ export class BotUxService {
     private readonly destinations: BotDestinationService,
     // Phase 7 — growth engine. Injected as `growth` because the router already has a `users`.
     private readonly growth: ReferralService,
+    // Phase 8 — campaign funnel ingestion and the (admin-only) campaign dashboard. Both are appended
+    // last, so every earlier phase keeps its constructor position (§19 backward compatibility).
+    private readonly campaignTracking: CampaignTrackingService,
+    private readonly campaignAdmin: CampaignAdminService,
   ) {}
 
   /** Entry point used by the inbound poller (and by tests). Never throws for bad input. */
@@ -219,6 +227,16 @@ export class BotUxService {
     }
 
     try {
+      // Phase 8 — a campaign link is recognized from the same `/start <payload>` grammar as the
+      // Phase 6 routes and the Phase 7 referral codes. Whether this is a *new* identity is answered
+      // before the registration below, because only a genuinely new identity may be counted as a
+      // campaign start (§8.3) — and the record is written only after that registration succeeded.
+      const campaignPayload = this.campaignStartOf(update);
+      const isNewIdentity = campaignPayload
+        ? this.users.findByPlatform(update.platform, update.platformUserId) ===
+          null
+        : false;
+
       // Phase 7 — a referral arrival is handled *before* the generic registration: the referral must
       // be recorded in the same write as the registration, and "was this identity new?" can only be
       // answered before that write (§5.1, §6.1).
@@ -258,6 +276,49 @@ export class BotUxService {
       // are therefore migrated lazily and collision-safely, without a bulk rewrite of the document.
       if (this.growth.enabled) {
         await this.growth.referralCodeFor(user.id);
+      }
+
+      // Phase 8 — the start is recorded *after* the identity is durably registered, and never for a
+      // returning user: re-opening the same link is not a new start. A failure here is logged and the
+      // user experience continues unchanged (the campaign layer is never allowed to break `/start`).
+      if (campaignPayload && isNewIdentity && this.campaignTracking.enabled) {
+        const ingestion = await this.campaignTracking.recordStart({
+          platform: update.platform,
+          platformUserId: update.platformUserId,
+          payload: campaignPayload.raw,
+        });
+
+        this.events.record(
+          ingestion.recorded
+            ? 'campaign_start_recorded'
+            : 'campaign_start_rejected',
+          {
+            platform: update.platform,
+            userId: user.id,
+            screen: ingestion.recorded
+              ? 'recorded'
+              : truncateForLog(ingestion.reason),
+          },
+        );
+
+        // Channel membership is a capability, not an assumption: with verification switched off (the
+        // default) nothing is asked, and on a platform without a verified `getChatMember` the join
+        // stays “unavailable” instead of being guessed (§8.4).
+        if (this.config.campaignChannelJoinVerification !== 'disabled') {
+          const membership =
+            await this.campaignTracking.verifyMembershipTransition({
+              platform: update.platform,
+              platformUserId: update.platformUserId,
+            });
+
+          if (membership.checked) {
+            this.events.record('campaign_membership_checked', {
+              platform: update.platform,
+              userId: user.id,
+              screen: membership.state,
+            });
+          }
+        }
       }
 
       if (update.kind === 'callback') {
@@ -303,6 +364,27 @@ export class BotUxService {
     const payload = parseStartPayload(update.text);
 
     return payload.kind === 'referral' ? payload.code : null;
+  }
+
+  /**
+   * The campaign payload carried by this update, or `null`.
+   *
+   * Only a plain message whose first token is `/start` is considered (the same restriction as the
+   * referral path), so a callback, forwarded text or a second token can never register a campaign
+   * start. The token itself is never logged.
+   */
+  private campaignStartOf(
+    update: InboundUpdate,
+  ): { raw: string; token: string } | null {
+    if (update.kind !== 'message') {
+      return null;
+    }
+
+    const payload = parseStartPayload(update.text);
+
+    return payload.kind === 'campaign'
+      ? { raw: payload.raw, token: payload.token }
+      : null;
   }
 
   /** Log the *fact* of a referral arrival. No code, link or third-party identity is ever logged. */
@@ -442,6 +524,28 @@ export class BotUxService {
       return;
     }
 
+    // Phase 8 — the campaign dashboard. Admin-gated server-side; a non-admin sees the ordinary menu
+    // and the existence of the surface is not disclosed (§15).
+    if (command === 'campaign' || this.campaignAdmin.owns(message.text ?? '')) {
+      const handled = await this.campaignAdmin.handleCommand(
+        adapter,
+        user,
+        message.text ?? '',
+      );
+
+      if (handled) {
+        return;
+      }
+
+      this.remember(user.id, 'menu');
+      await adapter.render({
+        chatId: message.chatId,
+        text: formatMenuScreen(),
+        keyboard: mainMenuKeyboard({ referral: this.growth.enabled }),
+      });
+      return;
+    }
+
     // Anything else is not a command the product supports: stay helpful, do not invent APIs.
     this.events.record('unknown_command', {
       platform: adapter.platform,
@@ -467,6 +571,19 @@ export class BotUxService {
     // so it is dispatched *before* the generic acknowledgement: exactly one answer per callback.
     if (action && isContentAction(action)) {
       await this.contentAdmin.handleCallback(
+        adapter,
+        user,
+        callback.callbackId,
+        typeof callback.messageId === 'number' ? callback.messageId : undefined,
+        action,
+      );
+      return;
+    }
+
+    // Phase 8 — the campaign dashboard answers its own buttons (its toasts differ per action), so it
+    // is dispatched before the generic acknowledgement: exactly one answer per callback.
+    if (action && isCampaignAction(action)) {
+      await this.campaignAdmin.handleCallback(
         adapter,
         user,
         callback.callbackId,
@@ -995,20 +1112,81 @@ export class BotUxService {
       return;
     }
 
-    const route = payload.route;
+    if (payload.kind === 'campaign') {
+      // A tracked campaign link: it behaves like the route it names, and when the campaign is not
+      // accepting traffic the user gets the ordinary menu plus one short, non-technical line. Nothing
+      // about the campaign is disclosed beyond the fact that the link is no longer active (§7.4).
+      const resolution = this.campaignTracking.resolve(
+        payload.token,
+        new Date(),
+      );
 
-    this.events.record('start_route', {
-      platform: adapter.platform,
-      userId: user.id,
-      screen: screenForRoute(route) ?? 'alert-wizard',
-    });
+      this.events.record('start_campaign', {
+        platform: adapter.platform,
+        userId: user.id,
+        screen: resolution?.campaign.destination ?? 'unknown',
+      });
+
+      if (!resolution || !resolution.accepting) {
+        this.remember(user.id, 'menu');
+        await adapter.render({
+          chatId: message.chatId,
+          text: `${formatCampaignUnavailableScreen()}\n\n${formatMenuScreen()}`,
+          keyboard: menuKeyboard({ referral: this.growth.enabled }),
+        });
+        return;
+      }
+
+      await this.enterRoute(
+        adapter,
+        user,
+        message.chatId,
+        resolution.campaign.destinationType === 'CHANNEL_INVITE'
+          ? 'channel'
+          : (resolution.campaign.destination as BotRoute),
+        'campaign',
+      );
+      return;
+    }
+
+    await this.enterRoute(
+      adapter,
+      user,
+      message.chatId,
+      payload.route,
+      'route',
+    );
+  }
+
+  /**
+   * Open one approved route for a user.
+   *
+   * Shared by `/start <route>` (Phase 6) and by a tracked campaign link (Phase 8), so a campaign can
+   * *reuse* the existing screens instead of growing a parallel flow: the campaign only decides which
+   * route is opened, never how it is rendered.
+   */
+  private async enterRoute(
+    adapter: PlatformAdapter,
+    user: User,
+    chatId: string,
+    route: BotRoute,
+    source: 'route' | 'campaign',
+  ): Promise<void> {
+    this.events.record(
+      source === 'route' ? 'start_route' : 'start_campaign_route',
+      {
+        platform: adapter.platform,
+        userId: user.id,
+        screen: screenForRoute(route) ?? 'alert-wizard',
+      },
+    );
 
     // The alert route enters the *existing* wizard — it never creates an alert by itself (§4.2).
     if (route === 'alert') {
       this.startWizard(user.id, 'symbol');
       const screen = this.renderScreen('alert-wizard', user.id);
       await adapter.render({
-        chatId: message.chatId,
+        chatId,
         text: screen.text,
         keyboard: screen.keyboard,
       });
@@ -1022,7 +1200,7 @@ export class BotUxService {
 
     this.remember(user.id, screen.screen);
     await adapter.render({
-      chatId: message.chatId,
+      chatId,
       text: screen.text,
       keyboard: screen.keyboard,
     });
@@ -1325,6 +1503,26 @@ export class BotUxService {
       userId: user.id,
       symbol: result.alert.symbol,
     });
+
+    // Phase 8 — the funnel event is recorded only *after* Phase 3 persisted the alert, through this
+    // single authoritative path: there is no second alert engine and no listener that could double
+    // count (§8.5). An unattributed user simply produces no campaign event.
+    if (this.campaignTracking.enabled) {
+      const attribution = await this.campaignTracking.recordAlertCreated({
+        platform: adapter.platform,
+        platformUserId: user.platformUserId,
+        alertId: result.alert.id,
+      });
+
+      if (attribution.recorded) {
+        this.events.record('campaign_alert_recorded', {
+          platform: adapter.platform,
+          userId: user.id,
+          screen: attribution.campaignId ?? 'unknown',
+        });
+      }
+    }
+
     this.clearWizard(user.id);
 
     return this.render(

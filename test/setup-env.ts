@@ -29,12 +29,22 @@ if (!process.env.USER_DATA_FILE) {
   // Phase 5: publication history lives in the same throw-away directory, and the admin surface is
   // enabled only for a synthetic test admin id.
   process.env.CHANNEL_DATA_FILE = join(directory, 'channel.json');
+  // Phase 8: campaign data lives in the same throw-away directory, and the redirect endpoint gets a
+  // synthetic public base URL so tracked links can be exercised over real HTTP.
+  process.env.CAMPAIGN_DATA_FILE = join(directory, 'campaigns.json');
 }
+
+process.env.CAMPAIGN_TRACKING_BASE_URL =
+  process.env.CAMPAIGN_TRACKING_BASE_URL ?? 'https://track.e2e.test';
 
 // Phase 6: a synthetic public bot username so the channel → bot CTA path is exercised end to end.
 // It is clearly a test value; the e2e suite never talks to a real platform.
 process.env.BALE_BOT_USERNAME =
   process.env.BALE_BOT_USERNAME ?? 'atabak_e2e_bot';
+// Phase 8: both platform usernames exist so a tracked link can be resolved for either platform
+// (the “other platform is not configured” fallback is covered by the unit suite).
+process.env.TELEGRAM_BOT_USERNAME =
+  process.env.TELEGRAM_BOT_USERNAME ?? 'atabak_e2e_tg_bot';
 
 // Phase 5: publication retries must not slow the suite down (their *count* is what is asserted).
 process.env.CHANNEL_PUBLICATION_RETRY_DELAY_MS =

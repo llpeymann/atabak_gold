@@ -115,6 +115,24 @@ export interface PlatformSendResult {
   error?: string;
 }
 
+/**
+ * Result of a `getChatMember` query (Phase 8 §8.4).
+ *
+ * `status` is the raw platform value (`member`, `administrator`, `creator`, `restricted`, `left`,
+ * `kicked`) translated into a tri-state by the caller. `supported: false` means *this platform was
+ * never claimed to answer the query* — the honest answer for Bale, whose support for `getChatMember`
+ * is not verified by this project.
+ */
+export interface PlatformMembershipResult {
+  platform: Platform;
+  supported: boolean;
+  /** `true` only when the platform answered the query successfully. */
+  answered: boolean;
+  /** Raw membership status as reported by the platform (`null` when it did not answer). */
+  status: string | null;
+  error: string | null;
+}
+
 /** Polling result of one long-poll round. */
 export interface PollResult {
   updates: InboundUpdate[];

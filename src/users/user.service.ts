@@ -42,6 +42,16 @@ export class UserService {
     return this.store.upsertUser(platformUserId, platform, chatId);
   }
 
+  /**
+   * The existing user behind a platform identity, or `null` when this identity has never been seen.
+   *
+   * Phase 8 needs this *before* a registration so that only a genuinely new identity can ever be
+   * counted as a campaign start (§8.3) — the same pre-write question Phase 7 asks for referrals.
+   */
+  findByPlatform(platform: Platform, platformUserId: string): User | null {
+    return this.store.findUserByPlatform(platform, platformUserId);
+  }
+
   /** Valid symbols come from the Phase 1 registry — no duplicate list exists in the bot. */
   isSupportedSymbol(symbol: string): boolean {
     return this.config.symbolRegistry.some(

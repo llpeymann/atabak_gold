@@ -11,6 +11,7 @@ import {
   isPlatform,
   InboundUpdate,
   Platform,
+  PlatformMembershipResult,
   PlatformPublishResult,
   PlatformSendResult,
   PollResult,
@@ -115,6 +116,57 @@ export class BotApiClient {
         `Could not answer callback on ${platform}: ${response.error}`,
       );
     }
+  }
+
+  /**
+   * Ask the platform whether a user is currently a member of a chat/channel (Phase 8 §8.4).
+   *
+   * Capability is platform-specific and is therefore *stated*, not assumed: Telegram answers
+   * `getChatMember`, while Bale's support for this query is unverified by this project, so a Bale call
+   * returns `supported: false` and the caller must record the join as unverified/unavailable instead
+   * of inventing one. Failures are returned, never thrown, exactly like every other call here.
+   */
+  async getChatMember(
+    platform: Platform,
+    chatId: string,
+    userId: string,
+  ): Promise<PlatformMembershipResult> {
+    if (platform !== 'telegram') {
+      return {
+        platform,
+        supported: false,
+        answered: false,
+        status: null,
+        error:
+          'getChatMember برای این پلتفرم در این پروژه تأیید نشده است؛ عضویت بدون تأیید ثبت می‌شود.',
+      };
+    }
+
+    const response = await this.call(platform, 'getChatMember', {
+      chat_id: chatId,
+      user_id: userId,
+    });
+
+    if (!response.ok) {
+      return {
+        platform,
+        supported: true,
+        answered: false,
+        status: null,
+        error: response.error,
+      };
+    }
+
+    const result = response.result as { status?: unknown } | null;
+    const status = typeof result?.status === 'string' ? result.status : null;
+
+    return {
+      platform,
+      supported: true,
+      answered: status !== null,
+      status,
+      error: status === null ? 'پاسخ پلتفرم وضعیت عضویت را مشخص نکرد.' : null,
+    };
   }
 
   /**

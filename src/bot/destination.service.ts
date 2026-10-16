@@ -39,6 +39,9 @@ export interface PlatformLinkCapabilities {
  */
 const USERNAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{3,31}$/;
 
+/** Same shape the inbound `/start <payload>` parser accepts — one definition, no drift (§7.5). */
+const START_PAYLOAD_PATTERN = /^[a-z0-9_-]{1,32}$/;
+
 export function withCapabilities(): Record<
   'bale' | 'telegram',
   PlatformLinkCapabilities
@@ -142,15 +145,32 @@ export class BotDestinationService {
    * platform does not support start payloads.
    */
   deepLink(platform: 'bale' | 'telegram', route: BotRoute): string | null {
+    return this.botDeepLink(platform, route);
+  }
+
+  /**
+   * Deep link carrying an arbitrary start payload (`?start=<payload>`), or `null` when it cannot be
+   * built.
+   *
+   * `deepLink(route)` is now a thin wrapper over this method, so every public bot URL in the project
+   * is produced by exactly one function and cannot drift between phases. The payload shape is the one
+   * the inbound parser accepts (`^[a-z0-9_-]{1,32}$`, §7.5), which keeps Phase 7 referral payloads
+   * (`ref_…`), Phase 6 routes and Phase 8 campaign payloads (`c_cmp…`) mutually unambiguous.
+   */
+  botDeepLink(platform: 'bale' | 'telegram', payload: string): string | null {
     const username = this.botUsername(platform);
 
     if (!username || !this.capabilities[platform].deepLinks) {
       return null;
     }
 
+    if (!START_PAYLOAD_PATTERN.test(payload)) {
+      return null;
+    }
+
     const host = platform === 'telegram' ? 'https://t.me' : 'https://ble.ir';
 
-    return `${host}/${username}?start=${encodeURIComponent(route)}`;
+    return `${host}/${username}?start=${encodeURIComponent(payload)}`;
   }
 
   /**

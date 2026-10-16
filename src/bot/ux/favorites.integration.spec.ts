@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { AlertService } from '../../alerts/alert.service';
 import { AlertStore } from '../../alerts/alert.store';
 import { BotUxService } from './bot-ux.service';
+import { createCampaignHarness } from '../../testing/test-doubles';
 import { ContentAdminService } from '../content/content-admin.service';
 import { CtaPolicyService } from '../../channel/cta-policy.service';
 import { BotDestinationService } from '../destination.service';
@@ -126,6 +127,12 @@ describe('favorites flow (integration)', () => {
       store,
       new AlertCapacityService(config, store),
     );
+    // Phase 8 — the campaign stack, wired exactly like the application (destinations are shared).
+    const campaigns = createCampaignHarness(
+      { ...process.env, BOT_POLLING_ENABLED: 'false' },
+      { config },
+    );
+
     const botUx = new BotUxService(
       config,
       platform.registry,
@@ -141,6 +148,8 @@ describe('favorites flow (integration)', () => {
       ),
       new BotDestinationService(config),
       growth,
+      campaigns.tracking,
+      campaigns.admin,
     );
 
     return { botUx, store, users, platform, market, config };

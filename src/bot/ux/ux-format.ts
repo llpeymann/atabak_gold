@@ -276,6 +276,19 @@ export function formatUnknownStartScreen(): string {
   );
 }
 
+/**
+ * Phase 8 — a campaign link that is paused, ended or outside its date range.
+ *
+ * The wording stays neutral on purpose: it says the link is not active any more, discloses nothing
+ * about the campaign, and continues with the normal menu instead of dead-ending the user.
+ */
+export function formatCampaignUnavailableScreen(): string {
+  return (
+    '⌛️ این لینک دیگر فعال نیست.\n\n' +
+    'می‌توانید از منوی زیر به همه بخش‌ها دسترسی داشته باشید.'
+  );
+}
+
 export function formatMenuScreen(): string {
   return (
     '📋 <b>منوی اصلی</b>\n\n' +

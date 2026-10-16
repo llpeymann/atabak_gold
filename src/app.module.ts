@@ -42,6 +42,15 @@ import { AlertCapacityService } from './alerts/alert-capacity.service';
 import { ReferralService } from './referrals/referral.service';
 import { UserService } from './users/user.service';
 import { UserStore } from './users/user.store';
+// Phase 8 — campaign tracking & attribution (one store, one management service, one ingestion path,
+// one reporting service and the admin-only dashboard that lives inside this same bot).
+import { CampaignAdminService } from './bot/campaign/campaign-admin.service';
+import { CampaignConversionService } from './campaigns/campaign-conversion.service';
+import { CampaignController } from './campaigns/campaign.controller';
+import { CampaignMetricsService } from './campaigns/campaign-metrics.service';
+import { CampaignService } from './campaigns/campaign.service';
+import { CampaignStore } from './campaigns/campaign.store';
+import { CampaignTrackingService } from './campaigns/campaign-tracking.service';
 
 @Module({
   imports: [
@@ -55,7 +64,7 @@ import { UserStore } from './users/user.store';
     HttpModule,
     ScheduleModule.forRoot(),
   ],
-  controllers: [AppController],
+  controllers: [AppController, CampaignController],
   providers: [
     AppService,
     AppConfigService,
@@ -106,6 +115,13 @@ import { UserStore } from './users/user.store';
     // the referral rules share exactly one `UserStore` instance.
     AlertCapacityService,
     ReferralService,
+    // Phase 8
+    CampaignStore,
+    CampaignService,
+    CampaignTrackingService,
+    CampaignConversionService,
+    CampaignMetricsService,
+    CampaignAdminService,
   ],
 })
 export class AppModule {}

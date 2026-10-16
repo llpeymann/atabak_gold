@@ -54,6 +54,14 @@ export type UxEvent =
   | 'referral_join_recorded'
   | 'referral_join_rejected'
   | 'referral_reward_granted'
+  // Phase 8 — campaign tracking: only facts (never a token, a link or a private note). The `screen`
+  // field carries a status word (recorded/rejected/attributed/unavailable), never user content.
+  | 'start_campaign'
+  | 'start_campaign_route'
+  | 'campaign_start_recorded'
+  | 'campaign_start_rejected'
+  | 'campaign_membership_checked'
+  | 'campaign_alert_recorded'
   | 'back'
   | 'home'
   | 'invalid_callback'

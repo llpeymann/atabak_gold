@@ -77,6 +77,22 @@ export type ContentCallbackAction =
   | { kind: 'content-cancel'; contentId: string }
   | { kind: 'content-publish'; contentId: string };
 
+/**
+ * Phase 8 — campaign dashboard actions.
+ *
+ * As with the content surface, the payload carries an internal id only: authorization is resolved
+ * server-side from the platform identity against the admin allow-list (`CHANNEL_ADMIN_USER_IDS`), so a
+ * modified or forwarded button can never grant access, change a cost or inject a conversion.
+ */
+export type CampaignCallbackAction =
+  | { kind: 'campaign-list'; page: number }
+  | { kind: 'campaign-view'; campaignId: string }
+  | { kind: 'campaign-stats'; campaignId: string }
+  | { kind: 'campaign-links'; campaignId: string }
+  | { kind: 'campaign-activate'; campaignId: string }
+  | { kind: 'campaign-pause'; campaignId: string }
+  | { kind: 'campaign-end'; campaignId: string };
+
 export type CallbackAction =
   | { kind: 'menu' }
   | { kind: 'home' }
@@ -86,7 +102,8 @@ export type CallbackAction =
   | { kind: 'manage-favorites' }
   | { kind: 'favorite'; op: 'add' | 'remove'; symbol: string }
   | AlertCallbackAction
-  | ContentCallbackAction;
+  | ContentCallbackAction
+  | CampaignCallbackAction;
 
 /** Symbols are uppercase registry ids; anything else is rejected before touching the store. */
 const SYMBOL_PATTERN = /^[A-Z0-9_]{1,32}$/;
@@ -184,6 +201,51 @@ export function callbackDataForContentAction(
   return `${CALLBACK_VERSION}:c:${op}:${contentId}`;
 }
 
+export function callbackDataForCampaignList(page: number): string {
+  return `${CALLBACK_VERSION}:camp:list:${Math.max(1, Math.floor(page))}`;
+}
+
+export function callbackDataForCampaignView(campaignId: string): string {
+  return `${CALLBACK_VERSION}:camp:view:${campaignId}`;
+}
+
+export function callbackDataForCampaignStats(campaignId: string): string {
+  return `${CALLBACK_VERSION}:camp:stats:${campaignId}`;
+}
+
+export function callbackDataForCampaignLinks(campaignId: string): string {
+  return `${CALLBACK_VERSION}:camp:links:${campaignId}`;
+}
+
+export function callbackDataForCampaignStatus(
+  campaignId: string,
+  op: 'act' | 'pause' | 'end',
+): string {
+  return `${CALLBACK_VERSION}:camp:${op}:${campaignId}`;
+}
+
+/** Campaign ids are generated internally (`cmp_<n>`); this is the shape a callback may carry. */
+export function isSafeCampaignId(value: string): boolean {
+  return /^cmp_\d{1,10}$/.test(value);
+}
+
+const CAMPAIGN_ACTION_KINDS: readonly CampaignCallbackAction['kind'][] = [
+  'campaign-list',
+  'campaign-view',
+  'campaign-stats',
+  'campaign-links',
+  'campaign-activate',
+  'campaign-pause',
+  'campaign-end',
+];
+
+/** Narrow a parsed callback to a campaign action (used by the router's dispatch). */
+export function isCampaignAction(
+  action: CallbackAction,
+): action is CampaignCallbackAction {
+  return (CAMPAIGN_ACTION_KINDS as readonly string[]).includes(action.kind);
+}
+
 /** Content ids are generated internally (`cnt_…`); this is the shape a callback may carry. */
 export function isSafeContentId(value: string): boolean {
   return isSafeChannelId(value);
@@ -276,6 +338,50 @@ function parseContentAction(tail: readonly string[]): CallbackAction | null {
       return { kind: 'content-cancel', contentId };
     case 'pub':
       return { kind: 'content-publish', contentId };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Campaign-dashboard actions. The payload is validated here (page number and id shape) before it can
+ * reach the domain layer; ownership and authorization are still resolved server-side.
+ */
+function parseCampaignAction(tail: readonly string[]): CallbackAction | null {
+  const [head, ...rest] = tail;
+
+  if (head === 'list') {
+    const [page, ...extra] = rest;
+    const parsed = Number(page);
+
+    return extra.length === 0 && Number.isInteger(parsed) && parsed >= 1
+      ? { kind: 'campaign-list', page: parsed }
+      : null;
+  }
+
+  const [campaignId, ...extra] = rest;
+
+  if (
+    extra.length > 0 ||
+    campaignId === undefined ||
+    !isSafeCampaignId(campaignId)
+  ) {
+    return null;
+  }
+
+  switch (head) {
+    case 'view':
+      return { kind: 'campaign-view', campaignId };
+    case 'stats':
+      return { kind: 'campaign-stats', campaignId };
+    case 'links':
+      return { kind: 'campaign-links', campaignId };
+    case 'act':
+      return { kind: 'campaign-activate', campaignId };
+    case 'pause':
+      return { kind: 'campaign-pause', campaignId };
+    case 'end':
+      return { kind: 'campaign-end', campaignId };
     default:
       return null;
   }
@@ -385,6 +491,9 @@ export function parseCallbackData(
     }
     case 'c': {
       return parseContentAction(tail);
+    }
+    case 'camp': {
+      return parseCampaignAction(tail);
     }
     case 'fav': {
       const [op, ...extra] = tail;

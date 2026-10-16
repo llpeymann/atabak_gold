@@ -358,6 +358,51 @@ export class AppConfigService {
     return this.readString('TELEGRAM_REFERRAL_BOT_USERNAME', '');
   }
 
+  // --- Phase 8: campaign tracking & attribution ---
+
+  /** Where campaigns, events, attributions, imports and conversions are persisted (`null` = off). */
+  get campaignDataFile(): string | null {
+    return this.optionalPath('CAMPAIGN_DATA_FILE');
+  }
+
+  /** Master switch of campaign tracking (`false` = no new ingestion, no admin surface, no erasure). */
+  get campaignTrackingEnabled(): boolean {
+    return this.readBooleanFlag('CAMPAIGN_TRACKING_ENABLED', true);
+  }
+
+  /** Click-to-conversion attribution window. Validated at startup to 1..3650 days. */
+  get campaignAttributionWindowMs(): number {
+    return (
+      this.readInteger('CAMPAIGN_ATTRIBUTION_WINDOW_DAYS', 30) * 86_400_000
+    );
+  }
+
+  /**
+   * Public base URL used for tracked redirect links (empty = the deployment has no redirect
+   * endpoint, so only direct deep links are offered — never a guessed URL).
+   */
+  get campaignTrackingBaseUrl(): string {
+    return this.readString('CAMPAIGN_TRACKING_BASE_URL', '');
+  }
+
+  /** `getChatMember` enables join checks; `disabled` assumes no platform capability (default). */
+  get campaignChannelJoinVerification(): string {
+    return this.readString('CAMPAIGN_CHANNEL_JOIN_VERIFICATION', 'disabled');
+  }
+
+  /** Retention of *raw click requests* only; every conversion/lead/customer record is kept. */
+  get campaignRawEventRetentionMs(): number {
+    return (
+      this.readNonNegativeInteger('CAMPAIGN_RAW_EVENT_RETENTION_DAYS', 90) *
+      86_400_000
+    );
+  }
+
+  /** Upper bound on retained raw click events per campaign (0 = no cap). */
+  get campaignMaxRawEvents(): number {
+    return this.readNonNegativeInteger('CAMPAIGN_MAX_RAW_EVENTS', 20_000);
+  }
+
   /** Inbound interaction switch: `false` keeps the pre-Phase-2 publish-only behaviour. */
   get botPollingEnabled(): boolean {
     return (

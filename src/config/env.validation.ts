@@ -160,6 +160,27 @@ const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   // configuration instead of showing a guessed or dead link.
   BALE_REFERRAL_BOT_USERNAME: '',
   TELEGRAM_REFERRAL_BOT_USERNAME: '',
+
+  // --- Phase 8: campaign tracking & attribution ---
+  // Where campaigns, attribution records, funnel events, imported aggregates and manual
+  // conversions are persisted (empty string disables persistence).
+  CAMPAIGN_DATA_FILE: './data/campaigns.json',
+  // Master switch. `false` = no new click/import/manual ingestion and no admin surface, while every
+  // already recorded campaign, event, attribution and conversion stays readable (nothing erased).
+  CAMPAIGN_TRACKING_ENABLED: 'true',
+  // Click-to-conversion attribution window in days (the frozen default is 30).
+  CAMPAIGN_ATTRIBUTION_WINDOW_DAYS: '30',
+  // Public base URL of this deployment used to build tracked redirect links (`<base>/c/<token>`).
+  // Empty = no redirect link is generated; direct platform deep links always keep working.
+  CAMPAIGN_TRACKING_BASE_URL: '',
+  // Channel-join verification: 'disabled' (default, assumes nothing) or 'getChatMember'
+  // (only platforms that actually answer it can ever report a verified join).
+  CAMPAIGN_CHANNEL_JOIN_VERIFICATION: 'disabled',
+  // Retention for *raw click requests* only. Conversions, leads, customers, attributions and
+  // imported aggregates are never pruned. 0 disables pruning.
+  CAMPAIGN_RAW_EVENT_RETENTION_DAYS: '90',
+  // Upper bound on retained raw click events per campaign (0 = no cap).
+  CAMPAIGN_MAX_RAW_EVENTS: '20000',
 };
 
 const logger = new Logger('EnvironmentValidation');
@@ -548,6 +569,25 @@ function validateReferralThresholds(env: Record<string, unknown>): void {
     1,
     10_000,
   );
+  // --- Phase 8: campaign tracking ---
+  env.CAMPAIGN_ATTRIBUTION_WINDOW_DAYS = readInteger(
+    env,
+    'CAMPAIGN_ATTRIBUTION_WINDOW_DAYS',
+    1,
+    3_650,
+  );
+  env.CAMPAIGN_RAW_EVENT_RETENTION_DAYS = readInteger(
+    env,
+    'CAMPAIGN_RAW_EVENT_RETENTION_DAYS',
+    0,
+    3_650,
+  );
+  env.CAMPAIGN_MAX_RAW_EVENTS = readInteger(
+    env,
+    'CAMPAIGN_MAX_RAW_EVENTS',
+    0,
+    10_000_000,
+  );
 }
 
 function isMessageTypeName(value: string): boolean {
@@ -809,6 +849,11 @@ export function validateEnvironment(
   // --- Phase 7: growth engine ---
   env.REFERRAL_ENABLED = readBoolean(env, 'REFERRAL_ENABLED');
   env.REFERRAL_REWARDS_ENABLED = readBoolean(env, 'REFERRAL_REWARDS_ENABLED');
+  // --- Phase 8: campaign tracking ---
+  env.CAMPAIGN_TRACKING_ENABLED = readBoolean(env, 'CAMPAIGN_TRACKING_ENABLED');
+  env.CAMPAIGN_CHANNEL_JOIN_VERIFICATION =
+    readCampaignJoinVerificationMode(env);
+  env.CAMPAIGN_TRACKING_BASE_URL = readCampaignTrackingBaseUrl(env);
   env.BALE_REFERRAL_BOT_USERNAME = readReferralBotUsername(
     env,
     'BALE_REFERRAL_BOT_USERNAME',
@@ -869,4 +914,66 @@ export function validateEnvironment(
   }
 
   return env;
+}
+
+/**
+ * Channel-join verification mode (§8.4).
+ *
+ * `disabled` is the honest default: no platform capability is assumed. `getChatMember` is only
+ * meaningful for platforms that actually answer that query — Telegram does; Bale's support is not
+ * verified by this project, so a Bale response is recorded as unverified, never as a join.
+ */
+export function readCampaignJoinVerificationMode(
+  env: Record<string, unknown>,
+): string {
+  const raw = asString(env, 'CAMPAIGN_CHANNEL_JOIN_VERIFICATION')
+    .trim()
+    .toLowerCase();
+
+  if (raw === '' || raw === 'disabled') {
+    return 'disabled';
+  }
+
+  if (raw === 'getchatmember') {
+    return 'getChatMember';
+  }
+
+  throw new EnvironmentValidationError(
+    `Invalid CAMPAIGN_CHANNEL_JOIN_VERIFICATION: "${raw}" (use "disabled" or "getChatMember")`,
+  );
+}
+
+/**
+ * Public base URL used to build tracked redirect links (§7.2).
+ *
+ * An empty value is a *valid* configuration: the deployment then has no redirect endpoint and only
+ * direct platform deep links are offered. A non-empty value must be an absolute http(s) URL without
+ * a trailing slash — guessing a public URL would produce links that silently never resolve.
+ */
+export function readCampaignTrackingBaseUrl(
+  env: Record<string, unknown>,
+): string {
+  const raw = asString(env, 'CAMPAIGN_TRACKING_BASE_URL').trim();
+
+  if (raw === '') {
+    return '';
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new EnvironmentValidationError(
+      `Invalid CAMPAIGN_TRACKING_BASE_URL: "${raw}" is not a valid absolute URL`,
+    );
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new EnvironmentValidationError(
+      `Invalid CAMPAIGN_TRACKING_BASE_URL: protocol "${parsed.protocol}" is not supported (use http or https)`,
+    );
+  }
+
+  return parsed.toString().replace(/\/+$/, '');
 }

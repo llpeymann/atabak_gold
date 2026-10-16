@@ -12,6 +12,12 @@ import { ReferralService } from '../referrals/referral.service';
 import { AlertService } from '../alerts/alert.service';
 import { AlertStore } from '../alerts/alert.store';
 import { BotUxService } from '../bot/ux/bot-ux.service';
+import { CampaignAdminService } from '../bot/campaign/campaign-admin.service';
+import { CampaignConversionService } from '../campaigns/campaign-conversion.service';
+import { CampaignMetricsService } from '../campaigns/campaign-metrics.service';
+import { CampaignService } from '../campaigns/campaign.service';
+import { CampaignStore } from '../campaigns/campaign.store';
+import { CampaignTrackingService } from '../campaigns/campaign-tracking.service';
 import { PriceMessageBuilder } from '../bot/price-message.builder';
 import { ContentAdminService } from '../bot/content/content-admin.service';
 import { ChannelEngineService } from '../channel/channel-engine.service';
@@ -97,6 +103,14 @@ export const DEFAULT_TEST_ENV: EnvMap = {
   CHANNEL_DAILY_RANGE_COOLDOWN_MINUTES: '90',
   CHANNEL_DAILY_REPORT_ENABLED: 'false',
   CHANNEL_DAILY_REPORT_TIME: '23:00',
+  // Phase 8: in-memory campaign store, explicit tracking config (no test ever touches `data/`).
+  CAMPAIGN_DATA_FILE: '',
+  CAMPAIGN_TRACKING_ENABLED: 'true',
+  CAMPAIGN_ATTRIBUTION_WINDOW_DAYS: '30',
+  CAMPAIGN_TRACKING_BASE_URL: '',
+  CAMPAIGN_CHANNEL_JOIN_VERIFICATION: 'disabled',
+  CAMPAIGN_RAW_EVENT_RETENTION_DAYS: '90',
+  CAMPAIGN_MAX_RAW_EVENTS: '20000',
 };
 
 export function createConfigService(overrides: EnvMap = {}): ConfigService {
@@ -282,6 +296,8 @@ export interface PlatformHarness {
     answerCallbackQuery: jest.Mock;
     publishText: jest.Mock;
     publishPhoto: jest.Mock;
+    /** Phase 8 — `getChatMember` double (channel-join verification). */
+    getChatMember: jest.Mock;
   };
   calls: PlatformCall[];
   /** Queue inbound updates returned by the next `getUpdates` round. */
@@ -541,6 +557,20 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
     },
   );
 
+  /**
+   * Phase 8 — membership query double. The conservative default (`left`, answered by the platform)
+   * means a test that forgets to set it can never fabricate a verified channel join.
+   */
+  const getChatMember = jest.fn((platform: Platform) =>
+    Promise.resolve({
+      platform,
+      supported: true,
+      answered: true,
+      status: 'left',
+      error: null,
+    }),
+  );
+
   const client = {
     getUpdates,
     sendMessage,
@@ -548,6 +578,7 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
     answerCallbackQuery,
     publishText,
     publishPhoto,
+    getChatMember,
   } as unknown as BotApiClient;
 
   return {
@@ -558,6 +589,7 @@ export function createPlatformHarness(env: EnvMap = {}): PlatformHarness {
       sendMessage,
       editMessageText,
       answerCallbackQuery,
+      getChatMember,
       publishText,
       publishPhoto,
     },
@@ -822,6 +854,73 @@ export function createChannelHarness(
   };
 }
 
+export interface CampaignHarness {
+  config: AppConfigService;
+  /** Platform harness the tracking service talks to (membership queries included). */
+  platform: PlatformHarness;
+  store: CampaignStore;
+  destinations: BotDestinationService;
+  service: CampaignService;
+  tracking: CampaignTrackingService;
+  conversions: CampaignConversionService;
+  metrics: CampaignMetricsService;
+  admin: CampaignAdminService;
+  load: () => Promise<void>;
+}
+
+/**
+ * Phase 8 stack (store → management → tracking → conversions → metrics → dashboard surface).
+ *
+ * The store is in-memory by default (`CAMPAIGN_DATA_FILE` empty) exactly like every other harness, and
+ * the existing user store / platform client are reused rather than rebuilt, so a test observes the
+ * same wiring the application uses.
+ */
+export function createCampaignHarness(
+  env: EnvMap = {},
+  options: {
+    config?: AppConfigService;
+    userStore?: UserStore;
+    platform?: PlatformHarness;
+    destinations?: BotDestinationService;
+  } = {},
+): CampaignHarness {
+  const config = options.config ?? createAppConfigService(env);
+  const platform =
+    options.platform ??
+    createPlatformHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+  const destinations =
+    options.destinations ?? new BotDestinationService(config);
+  const store = new CampaignStore(config);
+  const service = new CampaignService(config, store, destinations);
+  const tracking = new CampaignTrackingService(
+    config,
+    store,
+    service,
+    platform.client as unknown as BotApiClient,
+  );
+  const conversions = new CampaignConversionService(
+    store,
+    service,
+    tracking,
+    options.userStore ?? new UserStore(config),
+  );
+  const metrics = new CampaignMetricsService(config, store);
+  const admin = new CampaignAdminService(config, service, conversions, metrics);
+
+  return {
+    config,
+    platform,
+    store,
+    destinations,
+    service,
+    tracking,
+    conversions,
+    metrics,
+    admin,
+    load: () => store.ensureLoaded(),
+  };
+}
+
 export interface UxHarness {
   config: AppConfigService;
   platform: PlatformHarness;
@@ -839,6 +938,8 @@ export interface UxHarness {
   growth: ReferralService;
   /** Phase 7 — effective alert capacity derived from the reward ledger. */
   capacity: AlertCapacityService;
+  /** Phase 8 — campaign tracking & attribution stack. */
+  campaigns: CampaignHarness;
   /** Rendered platform calls of a given kind. */
   rendered: () => PlatformCall[];
   /** Newest rendered message (send or edit). */
@@ -850,7 +951,11 @@ export interface UxHarness {
 /** Complete Phase 2 UX stack (user store → views → router → platform adapters). */
 export function createUxHarness(
   env: EnvMap = {},
-  options: { store?: UserStore; alertStore?: AlertStore } = {},
+  options: {
+    store?: UserStore;
+    alertStore?: AlertStore;
+    campaignStore?: CampaignStore;
+  } = {},
 ): UxHarness {
   const config = createAppConfigService(env);
   const market = createMarketHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
@@ -893,6 +998,17 @@ export function createUxHarness(
     platform.registry,
     store,
   );
+  // Phase 8: the campaign stack shares this harness' destination service, so every public link is
+  // built by the same code the application uses.
+  const campaigns = createCampaignHarness(
+    { ...env, BOT_POLLING_ENABLED: 'false' },
+    {
+      config,
+      userStore: store,
+      platform,
+      destinations: channel.destinations,
+    },
+  );
   const botUx = new BotUxService(
     config,
     platform.registry,
@@ -903,6 +1019,8 @@ export function createUxHarness(
     channel.contentAdmin,
     channel.destinations,
     growth,
+    campaigns.tracking,
+    campaigns.admin,
   );
 
   const rendered = (): PlatformCall[] =>
@@ -925,6 +1043,7 @@ export function createUxHarness(
     botUx,
     growth,
     capacity,
+    campaigns,
     rendered,
     last: () => {
       const all = rendered();
