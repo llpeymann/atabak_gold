@@ -1,0 +1,417 @@
+{
+  "capturedAt": "2026-10-16T07:34:27+00:00",
+  "commit": "711833a",
+  "environment": {
+    "node": "v20.20.2",
+    "npm": "10.8.2",
+    "os": "Linux (sandbox)",
+    "docker": "NOT AVAILABLE in this environment"
+  },
+  "jest": {
+    "suites": 64,
+    "tests": 1039,
+    "failed": 0,
+    "skipped": 0,
+    "suitesDetail": [
+      {
+        "name": "src/alerts/alert-capacity.spec.ts",
+        "tests": 10,
+        "status": "passed"
+      },
+      {
+        "name": "src/alerts/alert-engine.integration.spec.ts",
+        "tests": 18,
+        "status": "passed"
+      },
+      {
+        "name": "src/alerts/alert-evaluator.spec.ts",
+        "tests": 31,
+        "status": "passed"
+      },
+      {
+        "name": "src/alerts/alert-notification.spec.ts",
+        "tests": 16,
+        "status": "passed"
+      },
+      {
+        "name": "src/alerts/alert.service.spec.ts",
+        "tests": 51,
+        "status": "passed"
+      },
+      {
+        "name": "src/alerts/alert.store.spec.ts",
+        "tests": 13,
+        "status": "passed"
+      },
+      {
+        "name": "src/app.service.spec.ts",
+        "tests": 2,
+        "status": "passed"
+      },
+      {
+        "name": "src/bale/bale.service.spec.ts",
+        "tests": 9,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/bot.service.spec.ts",
+        "tests": 7,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/content/content-admin.spec.ts",
+        "tests": 29,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/content/content-cta.spec.ts",
+        "tests": 8,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/deep-link.spec.ts",
+        "tests": 24,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/destination.service.spec.ts",
+        "tests": 13,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/price-message.builder.spec.ts",
+        "tests": 7,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/alert-flow.integration.spec.ts",
+        "tests": 35,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/bot-ux.service.spec.ts",
+        "tests": 48,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/callback-data.spec.ts",
+        "tests": 27,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/deep-link-flow.integration.spec.ts",
+        "tests": 16,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/favorites.integration.spec.ts",
+        "tests": 4,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/market-flow.integration.spec.ts",
+        "tests": 12,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/market-format.spec.ts",
+        "tests": 21,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/market-view.service.spec.ts",
+        "tests": 9,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/markup-integrity.spec.ts",
+        "tests": 28,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/number-input.spec.ts",
+        "tests": 39,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/start-route.integration.spec.ts",
+        "tests": 18,
+        "status": "passed"
+      },
+      {
+        "name": "src/bot/ux/ux-format.spec.ts",
+        "tests": 22,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/channel-cta.spec.ts",
+        "tests": 16,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/channel-engine.spec.ts",
+        "tests": 19,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/channel-format.spec.ts",
+        "tests": 12,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/channel-policy.spec.ts",
+        "tests": 22,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/channel-publisher.spec.ts",
+        "tests": 12,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/channel-scheduling.spec.ts",
+        "tests": 9,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/content-lifecycle.spec.ts",
+        "tests": 18,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/cta-policy.spec.ts",
+        "tests": 15,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/message-registry.spec.ts",
+        "tests": 10,
+        "status": "passed"
+      },
+      {
+        "name": "src/channel/publication.store.spec.ts",
+        "tests": 11,
+        "status": "passed"
+      },
+      {
+        "name": "src/common/html.spec.ts",
+        "tests": 2,
+        "status": "passed"
+      },
+      {
+        "name": "src/common/log-safety.spec.ts",
+        "tests": 7,
+        "status": "passed"
+      },
+      {
+        "name": "src/common/money.spec.ts",
+        "tests": 11,
+        "status": "passed"
+      },
+      {
+        "name": "src/common/tehran-time.spec.ts",
+        "tests": 3,
+        "status": "passed"
+      },
+      {
+        "name": "src/config/app-config.service.spec.ts",
+        "tests": 9,
+        "status": "passed"
+      },
+      {
+        "name": "src/config/env.validation.spec.ts",
+        "tests": 63,
+        "status": "passed"
+      },
+      {
+        "name": "src/intelligence/market-intelligence.spec.ts",
+        "tests": 28,
+        "status": "passed"
+      },
+      {
+        "name": "src/intelligence/market-summary.spec.ts",
+        "tests": 4,
+        "status": "passed"
+      },
+      {
+        "name": "src/market/anomaly-alert.service.spec.ts",
+        "tests": 7,
+        "status": "passed"
+      },
+      {
+        "name": "src/market/market-engine.integration.spec.ts",
+        "tests": 16,
+        "status": "passed"
+      },
+      {
+        "name": "src/market/market-state.service.spec.ts",
+        "tests": 12,
+        "status": "passed"
+      },
+      {
+        "name": "src/market/price-change.calculator.spec.ts",
+        "tests": 6,
+        "status": "passed"
+      },
+      {
+        "name": "src/market/price-normalizer.service.spec.ts",
+        "tests": 16,
+        "status": "passed"
+      },
+      {
+        "name": "src/market/raw-payload.parser.spec.ts",
+        "tests": 15,
+        "status": "passed"
+      },
+      {
+        "name": "src/market/sanity-checker.service.spec.ts",
+        "tests": 14,
+        "status": "passed"
+      },
+      {
+        "name": "src/market/symbols.spec.ts",
+        "tests": 10,
+        "status": "passed"
+      },
+      {
+        "name": "src/platform/bot-api.client.spec.ts",
+        "tests": 15,
+        "status": "passed"
+      },
+      {
+        "name": "src/platform/platform-adapter.spec.ts",
+        "tests": 8,
+        "status": "passed"
+      },
+      {
+        "name": "src/platform/update-poller.service.spec.ts",
+        "tests": 6,
+        "status": "passed"
+      },
+      {
+        "name": "src/poster/poster.service.spec.ts",
+        "tests": 3,
+        "status": "passed"
+      },
+      {
+        "name": "src/price/price.service.spec.ts",
+        "tests": 7,
+        "status": "passed"
+      },
+      {
+        "name": "src/referrals/referral-activity.spec.ts",
+        "tests": 16,
+        "status": "passed"
+      },
+      {
+        "name": "src/referrals/referral-code.spec.ts",
+        "tests": 12,
+        "status": "passed"
+      },
+      {
+        "name": "src/referrals/referral-flow.integration.spec.ts",
+        "tests": 13,
+        "status": "passed"
+      },
+      {
+        "name": "src/referrals/referral-rewards.spec.ts",
+        "tests": 27,
+        "status": "passed"
+      },
+      {
+        "name": "src/referrals/referral.service.spec.ts",
+        "tests": 24,
+        "status": "passed"
+      },
+      {
+        "name": "src/users/user.service.spec.ts",
+        "tests": 13,
+        "status": "passed"
+      },
+      {
+        "name": "src/users/user.store.spec.ts",
+        "tests": 11,
+        "status": "passed"
+      }
+    ]
+  },
+  "e2e": {
+    "suites": 5,
+    "tests": 36,
+    "failed": 0,
+    "suitesDetail": [
+      {
+        "name": "test/alert-journey.e2e-spec.ts",
+        "tests": 9,
+        "status": "passed"
+      },
+      {
+        "name": "test/app.e2e-spec.ts",
+        "tests": 2,
+        "status": "passed"
+      },
+      {
+        "name": "test/bot-ux.e2e-spec.ts",
+        "tests": 12,
+        "status": "passed"
+      },
+      {
+        "name": "test/channel-engine.e2e-spec.ts",
+        "tests": 6,
+        "status": "passed"
+      },
+      {
+        "name": "test/market-intelligence.e2e-spec.ts",
+        "tests": 7,
+        "status": "passed"
+      }
+    ]
+  },
+  "lint": {
+    "problems": 0,
+    "command": "npx eslint \"{src,test}/**/*.ts\""
+  },
+  "typescript": {
+    "tsconfig.json": "clean",
+    "tsconfig.build.json": "clean"
+  },
+  "build": {
+    "command": "npm run build",
+    "status": "PASS"
+  },
+  "coverage": {
+    "statements": "91.41",
+    "branches": "81.55",
+    "functions": "92.49",
+    "lines": "91.4"
+  },
+  "coverageScope": "application code (src/**), src/demo excluded — the harness is dev tooling, not part of the module graph",
+  "demo": {
+    "scenariosPassed": 8,
+    "scenariosTotal": 8,
+    "command": "node dist/demo/main.js --run all"
+  },
+  "notRun": [
+    {
+      "item": "Docker image build",
+      "why": "no docker in this environment",
+      "howToClose": "docker build -t atabak . on a host with Docker"
+    },
+    {
+      "item": "Live Telegram verification",
+      "why": "no Telegram credentials",
+      "howToClose": "set TELEGRAM_BOT_TOKEN and repeat the live scenario"
+    },
+    {
+      "item": "Live Bale verification on the current tree",
+      "why": "no Bale credentials available now",
+      "howToClose": "set BALE_BOT_TOKEN and run the runtime rig in docs/DEMO_GUIDE.md §live"
+    },
+    {
+      "item": "npm ci from scratch",
+      "why": "npm install already present; lockfile verified with npm ci --dry-run",
+      "howToClose": "run npm ci on a clean checkout"
+    }
+  ],
+  "verifiedAfterCleanInstall": true
+}
