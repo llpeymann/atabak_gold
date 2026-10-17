@@ -67,6 +67,16 @@ import { AdminErrorService } from './admin/admin-error.service';
 import { AdminMetricsService } from './admin/admin-metrics.service';
 import { AdminBroadcastService } from './admin/admin-broadcast.service';
 import { AdminService } from './bot/admin/admin.service';
+// Phase 11 — monitoring: one durable monitoring document (watches, job history, notification
+// outbox), the engine that turns real observations into Phase 10 incidents, the dispatcher, the
+// health/readiness endpoints and the single bounded heartbeat. No new infrastructure.
+import { MonitoringController } from './monitoring/monitoring.controller';
+import { MonitoringDispatchService } from './monitoring/monitoring-dispatch.service';
+import { MonitoringHealthService } from './monitoring/monitoring-health.service';
+import { MonitoringScheduler } from './monitoring/monitoring.scheduler';
+import { PersistenceMonitor } from './common/persistence-monitor.service';
+import { MonitoringService } from './monitoring/monitoring.service';
+import { MonitoringStore } from './monitoring/monitoring.store';
 
 @Module({
   imports: [
@@ -80,7 +90,7 @@ import { AdminService } from './bot/admin/admin.service';
     HttpModule,
     ScheduleModule.forRoot(),
   ],
-  controllers: [AppController, CampaignController],
+  controllers: [AppController, CampaignController, MonitoringController],
   providers: [
     AppService,
     AppConfigService,
@@ -153,6 +163,13 @@ import { AdminService } from './bot/admin/admin.service';
     AdminMetricsService,
     AdminBroadcastService,
     AdminService,
+    // Phase 11 — monitoring.
+    MonitoringStore,
+    PersistenceMonitor,
+    MonitoringService,
+    MonitoringDispatchService,
+    MonitoringHealthService,
+    MonitoringScheduler,
   ],
 })
 export class AppModule {}

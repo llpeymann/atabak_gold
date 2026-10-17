@@ -540,6 +540,163 @@ export class AppConfigService {
     return this.readInteger('ADMIN_BROADCAST_MAX_LENGTH', 3_000);
   }
 
+  // --- Phase 11: monitoring ---
+
+  /** Master switch; `false` is a documented, admin-visible state — never a silent one. */
+  get monitoringEnabled(): boolean {
+    return this.readBooleanFlag('MONITORING_ENABLED', true);
+  }
+
+  /** Where watches, job history and the notification outbox are persisted (`null` = memory only). */
+  get monitoringDataFile(): string | null {
+    return this.optionalPath('MONITORING_DATA_FILE');
+  }
+
+  /** Explicit administrator destination, or `null` to resolve a configured admin at runtime. */
+  get monitoringAdminChatId(): { chatId: string } | null {
+    const value = this.configService.get<string>('MONITORING_ADMIN_CHAT_ID');
+
+    if (value === undefined || value === null || String(value).trim() === '') {
+      return null;
+    }
+
+    return { chatId: String(value).trim() };
+  }
+
+  get monitoringAdminPlatform(): 'bale' | 'telegram' {
+    const value = this.readString('MONITORING_ADMIN_PLATFORM', 'bale')
+      .trim()
+      .toLowerCase();
+
+    return value === 'telegram' ? 'telegram' : 'bale';
+  }
+
+  get monitoringPriceFailureThreshold(): number {
+    return this.readInteger('MONITORING_PRICE_FAILURE_THRESHOLD', 3);
+  }
+
+  get monitoringDeliveryFailureThreshold(): number {
+    return this.readInteger('MONITORING_DELIVERY_FAILURE_THRESHOLD', 3);
+  }
+
+  get monitoringApplicationErrorThreshold(): number {
+    return this.readInteger('MONITORING_APPLICATION_ERROR_THRESHOLD', 5);
+  }
+
+  /**
+   * Stale threshold for monitoring.
+   *
+   * `0` (the default) means “reuse the Phase 1 freshness rule”, so monitoring and the market
+   * pipeline can never disagree about what “stale” means (§5.4).
+   */
+  get monitoringStaleAfterMs(): number {
+    const minutes = this.readNonNegativeInteger(
+      'MONITORING_STALE_AFTER_MINUTES',
+      0,
+    );
+
+    return (
+      (minutes === 0
+        ? this.readInteger('PRICE_STALE_AFTER_MINUTES', 45)
+        : minutes) * 60_000
+    );
+  }
+
+  get monitoringActiveHoursOnly(): boolean {
+    return this.readBooleanFlag('MONITORING_ACTIVE_HOURS_ONLY', true);
+  }
+
+  get monitoringNotificationCooldownMs(): number {
+    return (
+      this.readNonNegativeInteger(
+        'MONITORING_NOTIFICATION_COOLDOWN_SECONDS',
+        900,
+      ) * 1_000
+    );
+  }
+
+  get monitoringRepeatAfterMs(): number {
+    return this.readInteger('MONITORING_REPEAT_NOTIFY_MINUTES', 120) * 60_000;
+  }
+
+  get monitoringNotificationMaxAttempts(): number {
+    return this.readInteger('MONITORING_NOTIFICATION_MAX_ATTEMPTS', 3);
+  }
+
+  get monitoringNotificationRetryBackoffMs(): number {
+    return this.readNonNegativeInteger(
+      'MONITORING_NOTIFICATION_RETRY_BACKOFF_MS',
+      30_000,
+    );
+  }
+
+  get monitoringNotificationBatchSize(): number {
+    return this.readInteger('MONITORING_NOTIFICATION_BATCH_SIZE', 10);
+  }
+
+  get monitoringNotificationMinIntervalMs(): number {
+    return this.readNonNegativeInteger(
+      'MONITORING_NOTIFICATION_MIN_INTERVAL_MS',
+      500,
+    );
+  }
+
+  get monitoringNotificationHistoryLimit(): number {
+    return this.readNonNegativeInteger(
+      'MONITORING_NOTIFICATION_HISTORY_LIMIT',
+      500,
+    );
+  }
+
+  get monitoringSweepIntervalMs(): number {
+    return (
+      this.readNonNegativeInteger('MONITORING_SWEEP_INTERVAL_SECONDS', 60) *
+      1_000
+    );
+  }
+
+  get monitoringRecoveryNotifications(): boolean {
+    return this.readBooleanFlag('MONITORING_RECOVERY_NOTIFICATIONS', true);
+  }
+
+  get monitoringRecoveryStabilityMs(): number {
+    return (
+      this.readNonNegativeInteger('MONITORING_RECOVERY_STABILITY_SECONDS', 0) *
+      1_000
+    );
+  }
+
+  /** Documentation-only flag: this repository never claims a watchdog it does not run (§15). */
+  get monitoringExternalWatchdogEnabled(): boolean {
+    return this.readBooleanFlag('MONITORING_EXTERNAL_WATCHDOG_ENABLED', false);
+  }
+
+  /**
+   * Whether `now` falls inside the market-data schedule the application actually runs.
+   *
+   * Phase 0/1 publish every 30 minutes between 08:00 and 21:30 and once at 22:00 (Asia/Tehran), so
+   * “no fresh data at 03:00” is expected behaviour and must not page anybody (§5.4, §9.2).
+   */
+  isWithinPriceSchedule(now: Date = new Date()): boolean {
+    const hourMinute = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Tehran',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(now);
+
+    const [hourText, minuteText] = hourMinute.split(':');
+    const minutes = Number(hourText) * 60 + Number(minuteText);
+
+    if (!Number.isFinite(minutes)) {
+      // Unknown time ⇒ treat as active: a missed run is safer to report than to hide.
+      return true;
+    }
+
+    // 08:00 → 22:10 covers the last scheduled run (22:00) plus one cycle of slack.
+    return minutes >= 8 * 60 && minutes <= 22 * 60 + 10;
+  }
+
   /** Inbound interaction switch: `false` keeps the pre-Phase-2 publish-only behaviour. */
   get botPollingEnabled(): boolean {
     return (

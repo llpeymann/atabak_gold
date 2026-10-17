@@ -16,11 +16,12 @@
  *     submissions cannot both "win" and a retried confirmation cannot create a second lead (§7.3).
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { describeError } from '../common/log-safety';
+import { PersistenceMonitor } from '../common/persistence-monitor.service';
 import { AppConfigService } from '../config/app-config.service';
 import {
   LeadActivityRecord,
@@ -249,7 +250,10 @@ export class SalesStore {
   private loaded = false;
   private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly config: AppConfigService) {
+  constructor(
+    private readonly config: AppConfigService,
+    @Optional() private readonly persistence?: PersistenceMonitor,
+  ) {
     this.filePath = this.config.salesDataFile;
   }
 
@@ -429,10 +433,12 @@ export class SalesStore {
       await mkdir(dirname(this.filePath), { recursive: true });
       await writeFile(temporaryPath, JSON.stringify(payload, null, 2), 'utf-8');
       await rename(temporaryPath, this.filePath);
+      this.persistence?.success('sales-data');
     } catch (error) {
       this.logger.error(
         `Could not persist sales data to ${this.filePath}: ${describeError(error)}`,
       );
+      this.persistence?.failure('sales-data', 'write', error);
       // Deliberately re-thrown: a caller must never report a stored lead that the disk never got.
       throw new Error(
         `Sales data could not be persisted (${describeError(error)}).`,

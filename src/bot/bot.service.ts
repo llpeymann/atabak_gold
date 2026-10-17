@@ -6,6 +6,7 @@ import { PublicationOutcome } from '../channel/channel.types';
 import { describeError } from '../common/log-safety';
 import { TEHRAN_TIME_ZONE } from '../common/tehran-time';
 import { MarketEngineService } from '../market/market-engine.service';
+import { MonitoringService } from '../monitoring/monitoring.service';
 import { PublishableMarketUpdate } from '../market/market.types';
 import { PriceService } from '../price/price.service';
 
@@ -31,6 +32,12 @@ export class BotService implements OnModuleInit {
     private readonly priceService: PriceService,
     private readonly marketEngine: MarketEngineService,
     private readonly channelEngine: ChannelEngineService,
+    /**
+     * Phase 11 — this service is a *signal producer* only: it reports what the cycle actually did
+     * (fetch failure, rejected payload, publishable data, per-destination delivery) and never
+     * decides severity, retries or resolution itself.
+     */
+    private readonly monitoring: MonitoringService,
   ) {}
 
   onModuleInit(): void {
@@ -86,6 +93,14 @@ export class BotService implements OnModuleInit {
     job: string,
     variant: 'full' | 'poster',
   ): Promise<void> {
+    // Phase 11 — the cycle is a monitored job: its start, end and duration are recorded so a job
+    // that stops running can be detected from evidence instead of from its silence (§9.1).
+    await this.monitoring.recordJobStart({
+      name: 'market-price-cycle',
+      expectedIntervalMs: 30 * 60_000,
+      graceMs: 10 * 60_000,
+    });
+
     try {
       const fetch = await this.priceService.fetchRawPayload();
       const now = new Date(fetch.receivedAt);
@@ -97,6 +112,20 @@ export class BotService implements OnModuleInit {
       this.reportCycle(job, update, staleSymbols.length);
 
       if (!update.publishable) {
+        // A transport success that produced nothing usable is *not* a healthy cycle (§5.1).
+        await this.monitoring.onPriceCycleFailure({
+          reasonCode: update.blockingReason ?? 'NO_PUBLISHABLE_PRICES',
+          error: `no publishable prices (${update.blockingReason ?? 'unknown reason'})`,
+          transport: false,
+          at: now,
+        });
+        await this.monitoring.recordJobEnd({
+          name: 'market-price-cycle',
+          ok: false,
+          error: `no publishable prices (${update.blockingReason ?? 'unknown reason'})`,
+          at: now,
+        });
+
         this.logger.error(
           `❌ ${job}: no publishable prices (${update.blockingReason ?? 'unknown reason'}) — ` +
             'nothing was published.',
@@ -104,21 +133,87 @@ export class BotService implements OnModuleInit {
         return;
       }
 
+      // Valid, usable market data: the only evidence that recovers the price/staleness watches.
+      await this.monitoring.onPriceCycleSuccess(now);
+
       const outcome = await this.channelEngine.publishPriceUpdate(
         update,
         variant,
         now,
       );
       this.reportOutcome(job, outcome);
+      await this.reportDeliveries(outcome, now);
 
       // Movement/range events reuse this cycle: no additional provider call is made, and the
       // policy decides whether a fresh threshold crossing really is news (§17, §18).
       await this.publishMarketEvents(now);
+
+      await this.monitoring.recordJobEnd({
+        name: 'market-price-cycle',
+        ok: true,
+        at: now,
+      });
     } catch (error) {
       // Fetch failures, schema failures and unexpected errors land here: no publication, no
       // success log, market state untouched (a rejected price never reaches it).
       this.logger.error(`❌ ${job} failed: ${describeError(error)}`);
+
+      await this.monitoring.onPriceCycleFailure({
+        reasonCode: 'CYCLE_THREW',
+        error: describeError(error),
+        transport: true,
+      });
+      await this.monitoring.recordJobEnd({
+        name: 'market-price-cycle',
+        ok: false,
+        error: describeError(error),
+      });
     }
+  }
+
+  /**
+   * Phase 11 — report each destination's real outcome.
+   *
+   * `SENT` means the platform accepted the message; `UNKNOWN` (an ambiguous call) is reported as a
+   * delivery *failure* with the ambiguous classification, so the monitor never counts it as success
+   * (§6.1) and never retries it on its own.
+   */
+  private async reportDeliveries(
+    outcome: PublicationOutcome,
+    at: Date,
+  ): Promise<void> {
+    for (const delivery of outcome.deliveries) {
+      await this.monitoring.onDelivery({
+        platform: delivery.platform,
+        destination: 'channel',
+        target: delivery.destination,
+        operation: 'channel-publication',
+        ok: delivery.status === 'SENT',
+        error: delivery.lastError,
+        failureKind: delivery.failureCategory,
+        at,
+      });
+    }
+
+    if (outcome.deliveries.length === 0) {
+      return;
+    }
+
+    const sent = outcome.deliveries.filter(
+      (delivery) => delivery.status === 'SENT',
+    ).length;
+
+    await this.monitoring.onPublicationOutcome({
+      sent,
+      failed: outcome.deliveries.filter(
+        (delivery) => delivery.status === 'FAILED',
+      ).length,
+      unknown: outcome.deliveries.filter(
+        (delivery) => delivery.status === 'UNKNOWN',
+      ).length,
+      reason: outcome.skipReason,
+      at,
+    });
   }
 
   /**

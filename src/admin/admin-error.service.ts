@@ -46,6 +46,15 @@ export interface IncidentInput {
   reference?: string | null;
   correlationId?: string | null;
   retryable?: boolean;
+  /**
+   * Optional stable grouping key supplied by the producer.
+   *
+   * Phase 11 uses it because “same kind of failure” is not the same thing as “same summary text”:
+   * a monitoring fingerprint is built from category/platform/destination/reason, so two unrelated
+   * delivery failures cannot merge just because the platform worded the error identically.
+   * Omitted ⇒ the Phase 10 default (`source|category|summary`).
+   */
+  fingerprint?: string;
   at?: Date;
 }
 
@@ -93,7 +102,8 @@ export class AdminErrorService {
       return null;
     }
 
-    const fingerprint = `${input.source}|${input.category}|${summary}`;
+    const fingerprint =
+      input.fingerprint ?? `${input.source}|${input.category}|${summary}`;
 
     try {
       return await this.store.transact((tx) => {

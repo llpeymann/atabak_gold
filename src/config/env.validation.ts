@@ -240,6 +240,53 @@ const ENVIRONMENT_DEFAULTS: Readonly<Record<string, string>> = {
   ADMIN_BROADCAST_MAX_RECIPIENTS: '500',
   // Longest broadcast text (chars); the platform limit is enforced on top.
   ADMIN_BROADCAST_MAX_LENGTH: '3000',
+
+  // --- Phase 11: monitoring ---
+  // Master switch. `false` records nothing: the admin surface says so explicitly instead of
+  // pretending the system is healthy.
+  MONITORING_ENABLED: 'true',
+  // Where watches, job history and the notification outbox are persisted (empty = memory only).
+  MONITORING_DATA_FILE: './data/monitoring.json',
+  // Administrator destination for incident/recovery messages. Empty = resolve a configured admin's
+  // chat id at runtime; if none can be resolved, incidents are still persisted and the admin surface
+  // reports that notification is not configured.
+  MONITORING_ADMIN_CHAT_ID: '',
+  // Platform of that destination.
+  MONITORING_ADMIN_PLATFORM: 'bale',
+  // Consecutive price-cycle failures before a PRICE_API incident opens.
+  MONITORING_PRICE_FAILURE_THRESHOLD: '3',
+  // Consecutive failures of one destination before a delivery incident opens.
+  MONITORING_DELIVERY_FAILURE_THRESHOLD: '3',
+  // Consecutive identical application errors before an application incident opens.
+  MONITORING_APPLICATION_ERROR_THRESHOLD: '5',
+  // Age of valid market data that counts as stale. `0` = reuse PRICE_STALE_AFTER_MINUTES.
+  MONITORING_STALE_AFTER_MINUTES: '0',
+  // Only evaluate staleness/missed runs inside the price schedule (avoids night-time false alarms).
+  MONITORING_ACTIVE_HOURS_ONLY: 'true',
+  // Silence between two notifications about the same incident.
+  MONITORING_NOTIFICATION_COOLDOWN_SECONDS: '900',
+  // Interval of the single bounded reminder for an incident that is still open.
+  MONITORING_REPEAT_NOTIFY_MINUTES: '120',
+  // Attempts per notification row before it is marked FAILED (1..10).
+  MONITORING_NOTIFICATION_MAX_ATTEMPTS: '3',
+  // Base retry delay (exponential per attempt).
+  MONITORING_NOTIFICATION_RETRY_BACKOFF_MS: '30000',
+  // Notifications processed per sweep (bounded work per tick).
+  MONITORING_NOTIFICATION_BATCH_SIZE: '10',
+  // Minimum spacing between two sends inside one sweep.
+  MONITORING_NOTIFICATION_MIN_INTERVAL_MS: '500',
+  // Finished notification rows kept for the operator (pending rows are never pruned).
+  MONITORING_NOTIFICATION_HISTORY_LIMIT: '500',
+  // Monitoring heartbeat. `0` disables the sweep (tests drive it explicitly).
+  MONITORING_SWEEP_INTERVAL_SECONDS: '60',
+  // Recovery messages for resolved incidents.
+  MONITORING_RECOVERY_NOTIFICATIONS: 'true',
+  // Successes required to *hold* before an incident is closed (0 = a single verified success).
+  MONITORING_RECOVERY_STABILITY_SECONDS: '0',
+  // Documentation-only switch: the repository ships no external watchdog process. Setting this to
+  // `true` states that the deployment runs one (see docs/PHASE_11_REPORT.md §15); it changes nothing
+  // inside the application and never makes the app claim a watchdog is running.
+  MONITORING_EXTERNAL_WATCHDOG_ENABLED: 'false',
 };
 
 const logger = new Logger('EnvironmentValidation');
@@ -1014,6 +1061,109 @@ export function validateEnvironment(
     1,
     4096,
   );
+
+  // --- Phase 11: monitoring ---
+  env.MONITORING_ENABLED = readBoolean(env, 'MONITORING_ENABLED');
+  env.MONITORING_ADMIN_PLATFORM = readMonitoringPlatform(env);
+  env.MONITORING_PRICE_FAILURE_THRESHOLD = readInteger(
+    env,
+    'MONITORING_PRICE_FAILURE_THRESHOLD',
+    1,
+    100,
+  );
+  env.MONITORING_DELIVERY_FAILURE_THRESHOLD = readInteger(
+    env,
+    'MONITORING_DELIVERY_FAILURE_THRESHOLD',
+    1,
+    100,
+  );
+  env.MONITORING_APPLICATION_ERROR_THRESHOLD = readInteger(
+    env,
+    'MONITORING_APPLICATION_ERROR_THRESHOLD',
+    1,
+    1_000,
+  );
+  env.MONITORING_STALE_AFTER_MINUTES = readInteger(
+    env,
+    'MONITORING_STALE_AFTER_MINUTES',
+    0,
+    10_080,
+  );
+  env.MONITORING_ACTIVE_HOURS_ONLY = readBoolean(
+    env,
+    'MONITORING_ACTIVE_HOURS_ONLY',
+  );
+  env.MONITORING_NOTIFICATION_COOLDOWN_SECONDS = readInteger(
+    env,
+    'MONITORING_NOTIFICATION_COOLDOWN_SECONDS',
+    0,
+    86_400,
+  );
+  env.MONITORING_REPEAT_NOTIFY_MINUTES = readInteger(
+    env,
+    'MONITORING_REPEAT_NOTIFY_MINUTES',
+    1,
+    10_080,
+  );
+  env.MONITORING_NOTIFICATION_MAX_ATTEMPTS = readInteger(
+    env,
+    'MONITORING_NOTIFICATION_MAX_ATTEMPTS',
+    1,
+    10,
+  );
+  env.MONITORING_NOTIFICATION_RETRY_BACKOFF_MS = readInteger(
+    env,
+    'MONITORING_NOTIFICATION_RETRY_BACKOFF_MS',
+    0,
+    3_600_000,
+  );
+  env.MONITORING_NOTIFICATION_BATCH_SIZE = readInteger(
+    env,
+    'MONITORING_NOTIFICATION_BATCH_SIZE',
+    1,
+    100,
+  );
+  env.MONITORING_NOTIFICATION_MIN_INTERVAL_MS = readInteger(
+    env,
+    'MONITORING_NOTIFICATION_MIN_INTERVAL_MS',
+    0,
+    60_000,
+  );
+  env.MONITORING_NOTIFICATION_HISTORY_LIMIT = readInteger(
+    env,
+    'MONITORING_NOTIFICATION_HISTORY_LIMIT',
+    0,
+    100_000,
+  );
+  env.MONITORING_SWEEP_INTERVAL_SECONDS = readInteger(
+    env,
+    'MONITORING_SWEEP_INTERVAL_SECONDS',
+    0,
+    3_600,
+  );
+  env.MONITORING_RECOVERY_NOTIFICATIONS = readBoolean(
+    env,
+    'MONITORING_RECOVERY_NOTIFICATIONS',
+  );
+  env.MONITORING_RECOVERY_STABILITY_SECONDS = readInteger(
+    env,
+    'MONITORING_RECOVERY_STABILITY_SECONDS',
+    0,
+    86_400,
+  );
+  env.MONITORING_EXTERNAL_WATCHDOG_ENABLED = readBoolean(
+    env,
+    'MONITORING_EXTERNAL_WATCHDOG_ENABLED',
+  );
+
+  // A destination that is not a numeric chat id would silently send nowhere; refuse to start
+  // instead of running blind (§11).
+  const monitoringChatId = asString(env, 'MONITORING_ADMIN_CHAT_ID').trim();
+  if (monitoringChatId !== '' && !/^-?[0-9]{3,32}$/.test(monitoringChatId)) {
+    throw new EnvironmentValidationError(
+      `Invalid MONITORING_ADMIN_CHAT_ID: "${monitoringChatId}" — expected a numeric chat id`,
+    );
+  }
   // The same allow-list parser as every earlier admin surface: one accepted syntax, no drift.
   parseAdminUserIds(env.ADMIN_OWNER_IDS, 'ADMIN_OWNER_IDS');
   parseAdminUserIds(env.ADMIN_USER_IDS, 'ADMIN_USER_IDS');
@@ -1145,4 +1295,24 @@ export function readCampaignTrackingBaseUrl(
   }
 
   return parsed.toString().replace(/\/+$/, '');
+}
+
+/**
+ * Platform of the monitoring notification destination (§12.1).
+ *
+ * Only platforms this deployment can actually deliver to are accepted; anything else fails startup
+ * instead of silently sending nowhere.
+ */
+export function readMonitoringPlatform(
+  env: Record<string, unknown>,
+): 'bale' | 'telegram' {
+  const raw = asString(env, 'MONITORING_ADMIN_PLATFORM').trim().toLowerCase();
+
+  if (raw === 'bale' || raw === 'telegram') {
+    return raw;
+  }
+
+  throw new EnvironmentValidationError(
+    `Invalid MONITORING_ADMIN_PLATFORM: "${raw}" (use "bale" or "telegram")`,
+  );
 }

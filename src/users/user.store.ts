@@ -1,9 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { AppConfigService } from '../config/app-config.service';
 import { describeError } from '../common/log-safety';
+import { PersistenceMonitor } from '../common/persistence-monitor.service';
 import { Referral, RewardGrant } from '../referrals/referral.types';
 import {
   Favorite,
@@ -39,7 +40,10 @@ export class UserStore {
   /** Serializes write operations (last writer in the queue persists the newest state). */
   private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly config: AppConfigService) {
+  constructor(
+    private readonly config: AppConfigService,
+    @Optional() private readonly persistence?: PersistenceMonitor,
+  ) {
     this.filePath = this.config.userDataFile;
   }
 
@@ -420,12 +424,14 @@ export class UserStore {
       await mkdir(dirname(this.filePath), { recursive: true });
       await writeFile(temporaryPath, JSON.stringify(payload, null, 2), 'utf-8');
       await rename(temporaryPath, this.filePath);
+      this.persistence?.success('user-data');
 
       return true;
     } catch (error) {
       this.logger.error(
         `Could not persist user data to ${this.filePath}: ${describeError(error)}`,
       );
+      this.persistence?.failure('user-data', 'write', error);
 
       return false;
     }

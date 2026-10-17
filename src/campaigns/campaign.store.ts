@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { describeError } from '../common/log-safety';
+import { PersistenceMonitor } from '../common/persistence-monitor.service';
 import { AppConfigService } from '../config/app-config.service';
 import { Platform } from '../platform/platform.types';
 import {
@@ -102,7 +103,10 @@ export class CampaignStore {
   private loaded = false;
   private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly config: AppConfigService) {
+  constructor(
+    private readonly config: AppConfigService,
+    @Optional() private readonly persistence?: PersistenceMonitor,
+  ) {
     this.filePath = this.config.campaignDataFile;
   }
 
@@ -305,10 +309,12 @@ export class CampaignStore {
       await mkdir(dirname(this.filePath), { recursive: true });
       await writeFile(temporaryPath, JSON.stringify(payload, null, 2), 'utf-8');
       await rename(temporaryPath, this.filePath);
+      this.persistence?.success('campaign-data');
     } catch (error) {
       this.logger.error(
         `Could not persist campaign data to ${this.filePath}: ${describeError(error)}`,
       );
+      this.persistence?.failure('campaign-data', 'write', error);
       // Deliberately re-thrown: callers must not treat this ingestion as recorded (§11.4).
       throw new Error(
         `Campaign data could not be persisted (${describeError(error)}).`,

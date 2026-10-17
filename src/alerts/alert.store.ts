@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { describeError } from '../common/log-safety';
+import { PersistenceMonitor } from '../common/persistence-monitor.service';
 import { AppConfigService } from '../config/app-config.service';
 import {
   Alert,
@@ -53,7 +54,10 @@ export class AlertStore {
   private loaded = false;
   private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly config: AppConfigService) {
+  constructor(
+    private readonly config: AppConfigService,
+    @Optional() private readonly persistence?: PersistenceMonitor,
+  ) {
     this.filePath = this.config.alertsDataFile;
   }
 
@@ -267,10 +271,12 @@ export class AlertStore {
       await mkdir(dirname(this.filePath), { recursive: true });
       await writeFile(temporaryPath, JSON.stringify(payload, null, 2), 'utf-8');
       await rename(temporaryPath, this.filePath);
+      this.persistence?.success('alert-data');
     } catch (error) {
       this.logger.error(
         `Could not persist alert data to ${this.filePath}: ${describeError(error)}`,
       );
+      this.persistence?.failure('alert-data', 'write', error);
     }
   }
 

@@ -1,9 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { AppConfigService } from '../config/app-config.service';
 import { describeError } from '../common/log-safety';
+import { PersistenceMonitor } from '../common/persistence-monitor.service';
 import { PriceUnit, SymbolDailyStats } from './market.types';
 
 export interface PersistedSymbolState {
@@ -44,7 +45,10 @@ export class MarketStateStore {
   private readonly logger = new Logger(MarketStateStore.name);
   private readonly filePath: string | null;
 
-  constructor(private readonly config: AppConfigService) {
+  constructor(
+    private readonly config: AppConfigService,
+    @Optional() private readonly persistence?: PersistenceMonitor,
+  ) {
     this.filePath = this.config.marketStateFile;
   }
 
@@ -106,10 +110,12 @@ export class MarketStateStore {
       await mkdir(dirname(this.filePath), { recursive: true });
       await writeFile(temporaryPath, payload, 'utf-8');
       await rename(temporaryPath, this.filePath);
+      this.persistence?.success('market-state');
     } catch (error) {
       this.logger.error(
         `Could not persist market state to ${this.filePath}: ${describeError(error)}`,
       );
+      this.persistence?.failure('market-state', 'write', error);
     }
   }
 

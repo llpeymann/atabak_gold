@@ -5,6 +5,7 @@ import { PriceService } from '../price/price.service';
 import {
   createChannelHarness,
   createMarketHarness,
+  createMonitoringHarness,
   createPlatformHarness,
 } from '../testing/test-doubles';
 import { BotService } from './bot.service';
@@ -41,10 +42,21 @@ const createHarness = (env: Record<string, string> = {}) => {
     BOT_POLLING_ENABLED: 'false',
   });
   const channel = createChannelHarness(env, { market, platform });
+  // Phase 11 — the real monitoring engine (in-memory document, no destination configured so no
+  // test can ever reach a platform) is the fourth collaborator of the scheduler.
+  const monitoring = createMonitoringHarness(
+    { ...env, MONITORING_DATA_FILE: '' },
+    { market, platform },
+  );
 
-  const service = new BotService(priceService, market.engine, channel.engine);
+  const service = new BotService(
+    priceService,
+    market.engine,
+    channel.engine,
+    monitoring.service,
+  );
 
-  return { service, fetchRawPayload, market, platform, channel };
+  return { service, fetchRawPayload, market, platform, channel, monitoring };
 };
 
 const fetchResult = (

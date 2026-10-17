@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { describeError } from '../common/log-safety';
+import { PersistenceMonitor } from '../common/persistence-monitor.service';
 import { AppConfigService } from '../config/app-config.service';
 import { Platform } from '../platform/platform.types';
 import {
@@ -210,7 +211,10 @@ export class PublicationStore {
   /** Phase 10 — one durable settings slot (the only key used is `channel`). */
   private readonly settingSlots = new Map<string, ChannelSettings>();
 
-  constructor(private readonly config: AppConfigService) {
+  constructor(
+    private readonly config: AppConfigService,
+    @Optional() private readonly persistence?: PersistenceMonitor,
+  ) {
     this.filePath = this.config.channelDataFile;
     this.historyLimit = this.config.channelHistoryLimit;
   }
@@ -499,10 +503,12 @@ export class PublicationStore {
       await mkdir(dirname(this.filePath), { recursive: true });
       await writeFile(temporaryPath, JSON.stringify(data, null, 2), 'utf-8');
       await rename(temporaryPath, this.filePath);
+      this.persistence?.success('channel-data');
     } catch (error) {
       this.logger.error(
         `Could not persist channel data to ${this.filePath}: ${describeError(error)}`,
       );
+      this.persistence?.failure('channel-data', 'write', error);
     }
   }
 

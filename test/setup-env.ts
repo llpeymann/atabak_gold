@@ -80,3 +80,21 @@ process.env.ADMIN_BROADCAST_ENABLED =
   process.env.ADMIN_BROADCAST_ENABLED ?? 'true';
 process.env.ADMIN_BROADCAST_MIN_INTERVAL_MS =
   process.env.ADMIN_BROADCAST_MIN_INTERVAL_MS ?? '0';
+
+// Phase 11: monitoring runs in the e2e suite with its own throw-away document, an explicit (fake)
+// destination so the notification path can be exercised, and a sweep interval of 0 — the suite drives
+// `sweep()`/`processDue()` explicitly, so no timer ever fires during the run.
+process.env.MONITORING_DATA_FILE =
+  process.env.MONITORING_DATA_FILE ??
+  join(process.env.ATABAK_E2E_DIR ?? tmpdir(), 'monitoring.json');
+process.env.MONITORING_ENABLED = process.env.MONITORING_ENABLED ?? 'true';
+process.env.MONITORING_ADMIN_CHAT_ID =
+  process.env.MONITORING_ADMIN_CHAT_ID ?? '990001';
+process.env.MONITORING_SWEEP_INTERVAL_SECONDS =
+  process.env.MONITORING_SWEEP_INTERVAL_SECONDS ?? '0';
+process.env.MONITORING_ACTIVE_HOURS_ONLY =
+  process.env.MONITORING_ACTIVE_HOURS_ONLY ?? 'false';
+process.env.MONITORING_NOTIFICATION_MIN_INTERVAL_MS =
+  process.env.MONITORING_NOTIFICATION_MIN_INTERVAL_MS ?? '0';
+process.env.MONITORING_NOTIFICATION_RETRY_BACKOFF_MS =
+  process.env.MONITORING_NOTIFICATION_RETRY_BACKOFF_MS ?? '0';

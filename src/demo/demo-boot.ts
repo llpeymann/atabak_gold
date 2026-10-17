@@ -71,6 +71,10 @@ export function demoEnvProfile(): Record<string, string> {
     // Phase 10 — same rule as every other document: the admin trail (audit, incidents, activity days,
     // broadcast jobs) lives in the scratch directory and never escapes into the repository.
     ADMIN_DATA_FILE: join(DEMO_DATA_DIR, 'admin.json'),
+    // Phase 11 — monitoring state is scratch data too, and the demo drives the sweep explicitly
+    // instead of leaving a timer running behind a scenario.
+    MONITORING_DATA_FILE: join(DEMO_DATA_DIR, 'monitoring.json'),
+    MONITORING_SWEEP_INTERVAL_SECONDS: '0',
 
     // --- scheduled publications stay quiet -----------------------------------
     CHANNEL_DAILY_REPORT_ENABLED: 'false',

@@ -24,6 +24,11 @@ import { AdminAccessService } from '../admin/admin-access.service';
 import { AdminAuditService } from '../admin/admin-audit.service';
 import { AdminActivityService } from '../admin/admin-activity.service';
 import { AdminErrorService } from '../admin/admin-error.service';
+import { MonitoringDispatchService } from '../monitoring/monitoring-dispatch.service';
+import { MonitoringHealthService } from '../monitoring/monitoring-health.service';
+import { PersistenceMonitor } from '../common/persistence-monitor.service';
+import { MonitoringService } from '../monitoring/monitoring.service';
+import { MonitoringStore } from '../monitoring/monitoring.store';
 import { AdminMetricsService } from '../admin/admin-metrics.service';
 import { AdminBroadcastService } from '../admin/admin-broadcast.service';
 import { AdminService } from '../bot/admin/admin.service';
@@ -144,6 +149,29 @@ export const DEFAULT_TEST_ENV: EnvMap = {
   ADMIN_BROADCAST_BACKOFF_MS: '60000',
   ADMIN_BROADCAST_MAX_RECIPIENTS: '500',
   ADMIN_BROADCAST_MAX_LENGTH: '3000',
+  // Phase 11: monitoring is ON (it is the behaviour under test) with an in-memory document, a
+  // resolved-but-unset destination (incidents persist, nothing is ever sent) and a sweep interval of
+  // 0 — tests drive `tick()`/`sweep()` explicitly, so no timer can fire in the background.
+  MONITORING_ENABLED: 'true',
+  MONITORING_DATA_FILE: '',
+  MONITORING_ADMIN_CHAT_ID: '',
+  MONITORING_ADMIN_PLATFORM: 'bale',
+  MONITORING_PRICE_FAILURE_THRESHOLD: '3',
+  MONITORING_DELIVERY_FAILURE_THRESHOLD: '3',
+  MONITORING_APPLICATION_ERROR_THRESHOLD: '5',
+  MONITORING_STALE_AFTER_MINUTES: '0',
+  MONITORING_ACTIVE_HOURS_ONLY: 'false',
+  MONITORING_NOTIFICATION_COOLDOWN_SECONDS: '900',
+  MONITORING_REPEAT_NOTIFY_MINUTES: '120',
+  MONITORING_NOTIFICATION_MAX_ATTEMPTS: '3',
+  MONITORING_NOTIFICATION_RETRY_BACKOFF_MS: '1',
+  MONITORING_NOTIFICATION_BATCH_SIZE: '10',
+  MONITORING_NOTIFICATION_MIN_INTERVAL_MS: '0',
+  MONITORING_NOTIFICATION_HISTORY_LIMIT: '500',
+  MONITORING_SWEEP_INTERVAL_SECONDS: '0',
+  MONITORING_RECOVERY_NOTIFICATIONS: 'true',
+  MONITORING_RECOVERY_STABILITY_SECONDS: '0',
+  MONITORING_EXTERNAL_WATCHDOG_ENABLED: 'false',
 };
 
 export function createConfigService(overrides: EnvMap = {}): ConfigService {
@@ -1027,6 +1055,125 @@ export function createCampaignHarness(
   };
 }
 
+/**
+ * Phase 11 — the monitoring engine over real collaborators.
+ *
+ * Used both by the admin harness (whose health screen reads it) and by the dedicated monitoring
+ * harness below. No mocks: the real store, the real incident table (Phase 10) and the real platform
+ * registry, with a `MONITORING_DATA_FILE=''` document so nothing touches the disk unless a test
+ * passes a path.
+ */
+export function createMonitoringService(input: {
+  config: AppConfigService;
+  platform: PlatformHarness;
+  marketState: MarketStateService;
+  userStore: UserStore;
+  access: AdminAccessService;
+  errors: AdminErrorService;
+  persistence?: PersistenceMonitor;
+}): MonitoringService {
+  return new MonitoringService(
+    input.config,
+    new MonitoringStore(input.config),
+    input.errors,
+    input.marketState,
+    input.access,
+    input.userStore,
+    input.persistence,
+  );
+}
+
+export interface MonitoringHarness {
+  config: AppConfigService;
+  platform: PlatformHarness;
+  store: MonitoringStore;
+  service: MonitoringService;
+  /** Phase 11 — the seam every durable store reports its write outcome to. */
+  persistence: PersistenceMonitor;
+  dispatcher: MonitoringDispatchService;
+  health: MonitoringHealthService;
+  errors: AdminErrorService;
+  market: MarketHarness;
+  userStore: UserStore;
+  /** Resolved destination as the engine sees it (never a secret). */
+  destination: () => { configured: boolean; platform: string | null };
+  tick: (now?: Date) => Promise<void>;
+}
+
+/**
+ * Phase 11 stack: monitoring document → engine → dispatcher → health, over the real Phase 10
+ * incident table so the tests observe exactly what the admin error center would show.
+ */
+export function createMonitoringHarness(
+  env: EnvMap = {},
+  options: {
+    config?: AppConfigService;
+    platform?: PlatformHarness;
+    market?: MarketHarness;
+    userStore?: UserStore;
+  } = {},
+): MonitoringHarness {
+  const config = options.config ?? createAppConfigService(env);
+  const market =
+    options.market ??
+    createMarketHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+  const platform =
+    options.platform ??
+    createPlatformHarness({ ...env, BOT_POLLING_ENABLED: 'false' });
+  const userStore = options.userStore ?? new UserStore(config);
+  const access = new AdminAccessService(config);
+  const adminStore = new AdminStore(config);
+  const errors = new AdminErrorService(config, adminStore);
+  const store = new MonitoringStore(config);
+  const persistence = new PersistenceMonitor();
+  const service = new MonitoringService(
+    config,
+    store,
+    errors,
+    market.marketState,
+    access,
+    userStore,
+    persistence,
+  );
+  const dispatcher = new MonitoringDispatchService(
+    config,
+    store,
+    service,
+    platform.registry,
+  );
+  const health = new MonitoringHealthService(
+    config,
+    store,
+    service,
+    market.marketState,
+  );
+
+  return {
+    config,
+    platform,
+    store,
+    service,
+    persistence,
+    dispatcher,
+    health,
+    errors,
+    market,
+    userStore,
+    destination: () => {
+      const destination = service.notificationDestination();
+
+      return {
+        configured: destination.configured,
+        platform: destination.platform,
+      };
+    },
+    tick: async (now: Date = new Date()) => {
+      await service.sweep(now);
+      await dispatcher.processDue(now);
+    },
+  };
+}
+
 export interface AdminHarness {
   config: AppConfigService;
   platform: PlatformHarness;
@@ -1038,6 +1185,8 @@ export interface AdminHarness {
   metrics: AdminMetricsService;
   broadcast: AdminBroadcastService;
   service: AdminService;
+  /** Phase 11 — the real monitoring engine over the same admin document. */
+  monitoring: MonitoringService;
   load: () => Promise<void>;
 }
 
@@ -1151,6 +1300,14 @@ export function createAdminHarness(
   const audit = new AdminAuditService(config, store);
   const activity = new AdminActivityService(config, store);
   const errors = new AdminErrorService(config, store);
+  const monitoring = createMonitoringService({
+    config,
+    platform,
+    marketState: market.marketState,
+    userStore,
+    access,
+    errors,
+  });
   const metrics = new AdminMetricsService(
     config,
     userStore,
@@ -1164,6 +1321,7 @@ export function createAdminHarness(
     salesNotifications,
     market.marketState,
     errors,
+    monitoring,
   );
   const broadcast = new AdminBroadcastService(
     config,
@@ -1208,6 +1366,7 @@ export function createAdminHarness(
     metrics,
     broadcast,
     service,
+    monitoring,
     load: async () => {
       await store.ensureLoaded();
     },
@@ -1252,6 +1411,8 @@ export function createUxHarness(
     store?: UserStore;
     alertStore?: AlertStore;
     campaignStore?: CampaignStore;
+    /** Phase 11 — when present, the UX layer reports unhandled errors to the real engine. */
+    monitoring?: MonitoringService;
   } = {},
 ): UxHarness {
   const config = createAppConfigService(env);
@@ -1350,6 +1511,7 @@ export function createUxHarness(
     salesStack.ux,
     salesStack.admin,
     adminStack.service,
+    options.monitoring,
   );
 
   const rendered = (): PlatformCall[] =>

@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { AppConfigService } from '../../config/app-config.service';
+import { MonitoringService } from '../../monitoring/monitoring.service';
 import { describeError } from '../../common/log-safety';
 import { SECTION_NAMES } from '../../market/symbols';
 import { User } from '../../users/user.types';
@@ -221,6 +222,9 @@ export class BotUxService {
     // Phase 10 — the administrative surface. Appended last, exactly like the Phase 8/9 pairs, so
     // every earlier phase keeps its constructor position.
     private readonly admin: AdminService,
+    // Phase 11 — the monitoring engine. Optional so the existing unit harnesses keep building this
+    // service without a live engine; production always injects it (see `AppModule`).
+    @Optional() private readonly monitoring?: MonitoringService,
   ) {}
 
   /** Entry point used by the inbound poller (and by tests). Never throws for bad input. */
@@ -368,6 +372,20 @@ export class BotUxService {
       this.logger.error(
         `Failed to handle update ${update.updateId} on ${update.platform}: ${describeError(error)}`,
       );
+
+      // Phase 11 — this is the product's outermost error boundary, so it is the honest producer of
+      // `APPLICATION_ERROR`: one observation per failed interaction, fingerprinted by service +
+      // operation, escalated only after the configured consecutive threshold (§7). Monitoring must
+      // never break the fallback, hence the fire-and-forget with a swallowed rejection.
+      void this.monitoring
+        ?.onApplicationError({
+          service: 'bot-ux',
+          operation: 'handle-update',
+          error: describeError(error),
+          retryable: true,
+        })
+        .catch(() => undefined);
+
       await this.sendSafeFailure(adapter, update);
     }
   }

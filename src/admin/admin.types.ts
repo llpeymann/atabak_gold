@@ -135,7 +135,9 @@ export type IncidentSource =
   | 'scheduler'
   | 'bot-router'
   | 'admin'
-  | 'broadcast';
+  | 'broadcast'
+  /** Phase 11 — monitoring itself (health evaluation and its notification pipeline). */
+  | 'monitoring';
 
 export type IncidentSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 

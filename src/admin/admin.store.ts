@@ -15,11 +15,12 @@
  *     cannot enqueue the same recipient twice (§11.4, §15.3).
  */
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { describeError } from '../common/log-safety';
+import { PersistenceMonitor } from '../common/persistence-monitor.service';
 import { AppConfigService } from '../config/app-config.service';
 import {
   ADMIN_DOCUMENT_VERSION,
@@ -387,7 +388,10 @@ export class AdminStore {
 
   private readonly filePath: string | null;
 
-  constructor(private readonly config: AppConfigService) {
+  constructor(
+    private readonly config: AppConfigService,
+    @Optional() private readonly persistence?: PersistenceMonitor,
+  ) {
     const configured = this.config.adminDataFile;
 
     // The document path is pinned once, as an absolute path. An audit trail must not depend on the
@@ -563,7 +567,14 @@ export class AdminStore {
       const result = operation(draft);
 
       if (draft.changed) {
-        await this.writeFile(draft.toDocument());
+        try {
+          await this.writeFile(draft.toDocument());
+        } catch (error) {
+          this.persistence?.failure('admin-document', 'write', error);
+          throw error;
+        }
+
+        this.persistence?.success('admin-document');
         this.commit(draft);
       }
 

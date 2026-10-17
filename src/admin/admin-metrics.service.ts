@@ -36,6 +36,7 @@ import { SalesNotificationService } from '../sales/sales-notification.service';
 import { MarketStateService } from '../market/market-state.service';
 import { UserStore } from '../users/user.store';
 import { AdminActivityService } from './admin-activity.service';
+import { MonitoringService } from '../monitoring/monitoring.service';
 import { AdminErrorService } from './admin-error.service';
 import {
   MetricSection,
@@ -165,6 +166,8 @@ export class AdminMetricsService {
     private readonly salesNotifications: SalesNotificationService,
     private readonly marketState: MarketStateService,
     private readonly errors: AdminErrorService,
+    /** Phase 11 — operational health rows are *read* from the monitoring engine, never recomputed. */
+    private readonly monitoring: MonitoringService,
   ) {}
 
   /** Resolve a preset / custom range with the documented `[from, to)` contract (§4.2). */
@@ -679,6 +682,50 @@ export class AdminMetricsService {
           : 'فایل‌های سند فعال',
       ok: this.users.path === null ? false : true,
     });
+
+    // --- Phase 11: monitoring evidence (jobs, outbox, destination) -----------------
+    const snapshot = this.monitoring.snapshotSync(now);
+
+    rows.push({
+      labelFa: 'پایش عملیاتی',
+      valueFa: snapshot.enabled
+        ? `فعال · ${formatNumberFa(snapshot.openIncidents)} رخداد باز (${formatNumberFa(
+            snapshot.criticalIncidents,
+          )} بحرانی)`
+        : 'خاموش (MONITORING_ENABLED=false)',
+      ok: snapshot.enabled ? snapshot.criticalIncidents === 0 : null,
+    });
+
+    rows.push({
+      labelFa: 'اطلاع‌رسانی پایش',
+      valueFa: snapshot.notificationDestination.configured
+        ? `مقصد تنظیم شده · ${formatNumberFa(snapshot.notifications.pending)} در انتظار · ` +
+          `${formatNumberFa(snapshot.notifications.retryPending)} تلاش دوباره · ` +
+          `${formatNumberFa(snapshot.notifications.failed)} ناموفق · ` +
+          `${formatNumberFa(snapshot.notifications.unknown)} نامعلوم`
+        : `بدون مقصد — ${snapshot.notificationDestination.reason ?? 'تنظیم نشده'}`,
+      ok: snapshot.notificationDestination.configured
+        ? snapshot.notifications.failed === 0 &&
+          snapshot.notifications.unknown === 0
+        : null,
+    });
+
+    if (snapshot.jobs.length > 0) {
+      const failed = snapshot.jobs.filter(
+        (job) => job.status === 'FAILED',
+      ).length;
+      const missed = snapshot.jobs.filter(
+        (job) => job.status === 'MISSED',
+      ).length;
+
+      rows.push({
+        labelFa: 'کارهای زمان‌بندی‌شده',
+        valueFa:
+          `${formatNumberFa(snapshot.jobs.length)} کار ثبت‌شده · ` +
+          `${formatNumberFa(failed)} ناموفق · ${formatNumberFa(missed)} اجرانشده`,
+        ok: failed === 0 && missed === 0,
+      });
+    }
 
     return rows;
   }
